@@ -18,7 +18,7 @@ export async function run(
 
   return new Promise((resolve, reject) => {
     // Use shell mode so commands resolve via PATH and handle pipes/globs
-    const fullCmd = args.length ? `${cmd} ${args.join(" ")}` : cmd;
+    const fullCmd = args.length ? `${cmd} ${args.map(shellEscape).join(" ")}` : cmd;
     const proc = spawn(fullCmd, [], {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -66,6 +66,12 @@ export async function run(
       }, timeout);
     }
   });
+}
+
+/** Shell-escape an argument (wrap in single quotes if it contains spaces or special chars) */
+function shellEscape(arg: string): string {
+  if (/^[a-zA-Z0-9_\-./=:@%+]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
 /** Split a command string into [cmd, ...args] */
