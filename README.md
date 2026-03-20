@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/arodroz/gait/actions"><img src="https://img.shields.io/badge/tests-216%20passed-10B981?style=flat-square" alt="tests" /></a>
-  <a href="https://github.com/arodroz/gait"><img src="https://img.shields.io/badge/modules-34-3B82F6?style=flat-square" alt="modules" /></a>
+  <a href="https://github.com/arodroz/gait"><img src="https://img.shields.io/badge/modules-40-3B82F6?style=flat-square" alt="modules" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6B7280?style=flat-square" alt="license" /></a>
   <a href="https://code.visualstudio.com"><img src="https://img.shields.io/badge/VS%20Code-1.85%2B-007ACC?style=flat-square&logo=visualstudiocode" alt="VS Code" /></a>
 </p>
@@ -126,7 +126,7 @@ When a stage fails, the dashboard shows a **Fix** button:
 
 ## Commands
 
-29 commands via `Cmd+Shift+P`:
+31 commands via `Cmd+Shift+P`:
 
 <details>
 <summary><b>Pipeline & Gate</b></summary>
@@ -248,8 +248,8 @@ events = ["gate.failed", "regression.detected"]
 
 ```
 src/
-├── extension.ts              ← 29 commands, lifecycle, event wiring
-├── core/                     ← 34 modules
+├── extension.ts              ← 31 commands, lifecycle, event wiring
+├── core/                     ← 40 modules
 │   ├── pipeline.ts           ← Stage runner, topo-sort, early abort
 │   ├── runner.ts             ← Shell executor (spawn + escape + timeout)
 │   ├── config.ts             ← TOML config, stack detection
