@@ -14,10 +14,11 @@ import { loadConfig, refreshFiles, sendNotify, getFirstChangedLine } from "./com
 import { cmdInit } from "./commands/init";
 import { cmdGate, cmdRunStage } from "./commands/gate";
 import { cmdRunAgent, cmdFixStage, cmdCodeReview, cmdGenerateTests, cmdEditMemory, cmdViewMemory, cmdCostSummary } from "./commands/agent";
-import { cmdOpenDashboard, cmdInstallHook, cmdRollback, cmdRelease, cmdRecover, cmdPreflight,
-  cmdGenerateAgentsMd, cmdRunScript, cmdListScripts, cmdDetectScripts, cmdSnapshot,
-  cmdRestoreSnapshot, cmdSwitchProfile, cmdCreatePR, cmdRunWorkflow, cmdAuditDeps,
-  cmdInstallAllHooks, cmdManageHooks } from "./commands/misc";
+import { cmdOpenDashboard, cmdRollback, cmdRecover, cmdPreflight, cmdGenerateAgentsMd,
+  cmdSnapshot, cmdRestoreSnapshot, cmdSwitchProfile, cmdRunWorkflow, cmdAuditDeps } from "./commands/misc";
+import { cmdRelease, cmdCreatePR } from "./commands/release";
+import { cmdRunScript, cmdListScripts, cmdDetectScripts } from "./commands/scripts";
+import { cmdInstallHook, cmdInstallAllHooks, cmdManageHooks } from "./commands/hooks";
 import type { StageName } from "./core/pipeline";
 import * as path from "path";
 import * as git from "./core/git";
