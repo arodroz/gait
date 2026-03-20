@@ -92,10 +92,6 @@ function el(tag: string, attrs?: Record<string, string>, ...children: (Node | st
   return e;
 }
 
-function text(s: string): Text {
-  return document.createTextNode(s);
-}
-
 function buildHeader(state: DashboardState): HTMLElement {
   const header = el("div", { className: "header" });
   header.appendChild(el("h1", {}, state.project));

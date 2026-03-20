@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import * as path from "path";
 import type { PipelineResult, StageResult, StageName } from "../core/pipeline";
 
 /** State sent to the webview */

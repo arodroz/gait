@@ -1,5 +1,5 @@
 import { run, type RunResult } from "./runner";
-import type { Config, StackCommands } from "./config";
+import type { Config } from "./config";
 import { parseDuration } from "./util";
 
 export type StageName = "lint" | "typecheck" | "test" | "build";

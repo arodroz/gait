@@ -1,5 +1,4 @@
 import type { Config, Stack } from "./config";
-import * as path from "path";
 
 /** Generate AGENTS.md content from gait config */
 export function generate(cfg: Config, stacks: Stack[]): string {

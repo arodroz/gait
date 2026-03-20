@@ -50,15 +50,42 @@
         "command": "gait.release",
         "title": "Gait: Release"
       },
-      { "command": "gait.installHook", "title": "Gait: Install Pre-Commit Hook" },
-      { "command": "gait.runAgent", "title": "Gait: Run Agent" },
-      { "command": "gait.rollback", "title": "Gait: Rollback Assistant" },
-      { "command": "gait.recover", "title": "Gait: Recover (Cleanup)" },
-      { "command": "gait.preflight", "title": "Gait: Environment Check" },
-      { "command": "gait.generateAgentsMd", "title": "Gait: Generate AGENTS.md" },
-      { "command": "gait.runScript", "title": "Gait: Run Script" },
-      { "command": "gait.listScripts", "title": "Gait: List Scripts" },
-      { "command": "gait.detectScripts", "title": "Gait: Detect Script Patterns" }
+      {
+        "command": "gait.installHook",
+        "title": "Gait: Install Pre-Commit Hook"
+      },
+      {
+        "command": "gait.runAgent",
+        "title": "Gait: Run Agent"
+      },
+      {
+        "command": "gait.rollback",
+        "title": "Gait: Rollback Assistant"
+      },
+      {
+        "command": "gait.recover",
+        "title": "Gait: Recover (Cleanup)"
+      },
+      {
+        "command": "gait.preflight",
+        "title": "Gait: Environment Check"
+      },
+      {
+        "command": "gait.generateAgentsMd",
+        "title": "Gait: Generate AGENTS.md"
+      },
+      {
+        "command": "gait.runScript",
+        "title": "Gait: Run Script"
+      },
+      {
+        "command": "gait.listScripts",
+        "title": "Gait: List Scripts"
+      },
+      {
+        "command": "gait.detectScripts",
+        "title": "Gait: Detect Script Patterns"
+      }
     ],
     "viewsContainers": {
       "activitybar": [
@@ -94,7 +121,7 @@
   "scripts": {
     "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild src/webview/main.ts --bundle --outfile=out/webview.js --format=iife --sourcemap",
     "watch": "npm run compile -- --watch",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && eslint src/",
     "test": "vitest run",
     "test:watch": "vitest",
     "package": "npm run compile -- --minify"
@@ -102,7 +129,10 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.57.1",
+    "@typescript-eslint/parser": "^8.57.1",
     "esbuild": "^0.24.0",
+    "eslint": "^10.1.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.0"
   },

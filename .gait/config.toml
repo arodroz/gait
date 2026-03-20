@@ -2,7 +2,7 @@
 name = "gait"
 
 [stacks.typescript]
-Lint = "npx eslint ."
+Lint = "npx tsc --noEmit && npx eslint src/"
 Test = "npx vitest run"
 Typecheck = "npx tsc --noEmit"
 Build = "npm run build"
