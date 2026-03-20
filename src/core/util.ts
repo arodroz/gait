@@ -25,8 +25,3 @@ export function formatDuration(ms: number): string {
 export function timestamp(): string {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
 }
-
-/** This is a dummy function for testing rollback */
-export function dummy(): string {
-  return "this should be reverted";
-}
