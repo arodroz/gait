@@ -67,6 +67,15 @@ export async function simulateRollback(
     const statResult = await run("git", ["diff", "--cached", "--stat"], tmpDir, 10_000);
     const filesAffected = statResult.stdout.trim().split("\n").filter(Boolean).length;
 
+    // Ensure dependencies are available in worktree
+    // Symlink node_modules if it exists in the original dir (fast, no install)
+    const srcNodeModules = path.join(cwd, "node_modules");
+    const dstNodeModules = path.join(tmpDir, "node_modules");
+    if (fs.existsSync(srcNodeModules) && !fs.existsSync(dstNodeModules)) {
+      onProgress?.("Linking dependencies...");
+      fs.symlinkSync(srcNodeModules, dstNodeModules, "dir");
+    }
+
     // Run tests
     let testsPassed = true;
     let testOutput = "";
