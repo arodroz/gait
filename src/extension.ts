@@ -23,11 +23,13 @@ import { parseTestOutput } from "./core/test-parser";
 import { AgentRunner } from "./core/agent";
 import { buildFixPrompt, runAutofixLoop } from "./core/autofix";
 import { StatusBarManager } from "./views/statusbar";
-import { PipelineTreeProvider } from "./views/sidebar";
+import { PipelineTreeProvider, ActionsTreeProvider, InfoTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
 
 let statusBar: StatusBarManager;
 let pipelineTree: PipelineTreeProvider;
+let actionsTree: ActionsTreeProvider;
+let infoTree: InfoTreeProvider;
 let dashboard: DashboardPanel;
 let cfg: config.Config | undefined;
 let cwd: string;
@@ -42,12 +44,16 @@ export function activate(context: vscode.ExtensionContext) {
 
   statusBar = new StatusBarManager();
   pipelineTree = new PipelineTreeProvider();
+  actionsTree = new ActionsTreeProvider();
+  infoTree = new InfoTreeProvider();
   dashboard = new DashboardPanel(context.extensionUri);
   agent = new AgentRunner();
 
   context.subscriptions.push(statusBar, dashboard);
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("gait.pipeline", pipelineTree),
+    vscode.window.registerTreeDataProvider("gait.actions", actionsTree),
+    vscode.window.registerTreeDataProvider("gait.info", infoTree),
   );
 
   if (config.configExists(cwd)) loadConfig();
@@ -212,6 +218,9 @@ async function updateDashboardInfo() {
     clean,
     configuredStages: getConfiguredStages(),
   });
+
+  // Update sidebar info tree
+  infoTree.update({ project: cfg.project.name, branch: branchName, stacks, clean });
 }
 
 async function refreshFiles() {
@@ -426,6 +435,7 @@ async function cmdGate(): Promise<boolean> {
 
   lastPipelineResult = result;
   statusBar.setGateStatus(result.passed, result.duration);
+  pipelineTree.setGateResult(result.passed, result.duration);
   dashboard.setPipelineResult(result);
 
   const dur = (result.duration / 1000).toFixed(1);

@@ -98,10 +98,9 @@
     },
     "views": {
       "gait": [
-        {
-          "id": "gait.pipeline",
-          "name": "Pipeline"
-        }
+        { "id": "gait.pipeline", "name": "Pipeline" },
+        { "id": "gait.actions", "name": "Quick Actions" },
+        { "id": "gait.info", "name": "Project" }
       ]
     },
     "keybindings": [
