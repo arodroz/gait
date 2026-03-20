@@ -1,6 +1,10 @@
 baseline_*.json
 coverage.json
 flaky.json
+costs.json
+snapshots.json
+memory.json
+impact-map.json
 history/
 .hook-trigger
 .hook-result
