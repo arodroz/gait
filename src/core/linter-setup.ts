@@ -55,6 +55,7 @@ async function setupTypeScript(cwd: string, result: SetupResult): Promise<void> 
     if (!allDeps["eslint"]) needed.push("eslint");
     if (!allDeps["@typescript-eslint/eslint-plugin"]) needed.push("@typescript-eslint/eslint-plugin");
     if (!allDeps["@typescript-eslint/parser"]) needed.push("@typescript-eslint/parser");
+    if (!allDeps["@vitest/coverage-v8"] && allDeps["vitest"]) needed.push("@vitest/coverage-v8");
 
     if (needed.length > 0) {
       const installResult = await run("npm", ["install", "-D", ...needed], cwd, 60_000);

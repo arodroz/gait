@@ -529,15 +529,25 @@ async function cmdGate(): Promise<boolean> {
     const changedFiles = stagedFiles.length > 0 ? stagedFiles : (await git.diffStat(cwd)).map((s) => s.path);
     if (changedFiles.length > 0 && cfg) {
       const stack = Object.keys(cfg.stacks)[0] ?? "";
-      const untested = await findUntested(cwd, changedFiles, stack);
-      if (untested.length > 0) {
-        dashboard.addLog(`${untested.length} new function(s) without test coverage`, "warn");
-        const names = untested.slice(0, 5).map((u) => `${u.file}:${u.name}`);
-        for (const n of names) dashboard.addLog(`  untested: ${n}`, "warn");
-        if (untested.length > 5) dashboard.addLog(`  ...and ${untested.length - 5} more`, "warn");
+      dashboard.addLog(`Running coverage analysis (${stack})...`, "info");
+      const covResult = await findUntested(cwd, changedFiles, stack);
+      if (covResult.error) {
+        dashboard.addLog(`Coverage: ${covResult.error}`, "warn");
+      } else if (covResult.uncovered.length > 0) {
+        dashboard.addLog(`${covResult.uncovered.length} function(s) without test coverage`, "warn");
+        for (const u of covResult.uncovered.slice(0, 5)) {
+          dashboard.addLog(`  untested: ${u.file}:${u.name}`, "warn");
+        }
+        if (covResult.uncovered.length > 5) {
+          dashboard.addLog(`  ...and ${covResult.uncovered.length - 5} more`, "warn");
+        }
+      } else {
+        dashboard.addLog(`Coverage: all changed functions are tested`, "success");
       }
     }
-  } catch { /* coverage check is best-effort */ }
+  } catch (err) {
+    dashboard.addLog(`Coverage check failed: ${err}`, "warn");
+  }
 
   return result.passed;
 }
