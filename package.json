@@ -91,7 +91,14 @@
       { "command": "gait.switchProfile", "title": "Gait: Switch Pipeline Profile" },
       { "command": "gait.createPR", "title": "Gait: Create Pull Request" },
       { "command": "gait.runWorkflow", "title": "Gait: Run Workflow" },
-      { "command": "gait.costSummary", "title": "Gait: Cost Summary" }
+      { "command": "gait.costSummary", "title": "Gait: Cost Summary" },
+      { "command": "gait.editMemory", "title": "Gait: Edit Agent Memory" },
+      { "command": "gait.viewMemory", "title": "Gait: View Memory" },
+      { "command": "gait.codeReview", "title": "Gait: AI Code Review" },
+      { "command": "gait.generateTestsForFile", "title": "Gait: Generate Tests for File" },
+      { "command": "gait.auditDeps", "title": "Gait: Audit Dependencies" },
+      { "command": "gait.installAllHooks", "title": "Gait: Install All Hooks" },
+      { "command": "gait.manageHooks", "title": "Gait: Manage Hooks" }
     ],
     "viewsContainers": {
       "activitybar": [

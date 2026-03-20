@@ -34,6 +34,11 @@ import { CostTracker } from "./core/cost-tracker";
 import * as prGenerator from "./core/pr-generator";
 import * as workflow from "./core/workflow";
 import { notify, type NotifyConfig, type NotifyPayload } from "./core/notify";
+import * as memory from "./core/memory";
+import { reviewDiff, shouldBlock as reviewShouldBlock } from "./core/review";
+import { generateTests } from "./core/test-gen";
+import * as depAudit from "./core/dep-audit";
+import * as hookScripts from "./core/hook-scripts";
 import { StatusBarManager } from "./views/statusbar";
 import { PipelineTreeProvider, ActionsTreeProvider, InfoTreeProvider, ScriptsTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
@@ -102,6 +107,13 @@ export function activate(context: vscode.ExtensionContext) {
     "gait.createPR": cmdCreatePR,
     "gait.runWorkflow": cmdRunWorkflow,
     "gait.costSummary": cmdCostSummary,
+    "gait.editMemory": cmdEditMemory,
+    "gait.viewMemory": cmdViewMemory,
+    "gait.codeReview": cmdCodeReview,
+    "gait.generateTestsForFile": cmdGenerateTests,
+    "gait.auditDeps": cmdAuditDeps,
+    "gait.installAllHooks": cmdInstallAllHooks,
+    "gait.manageHooks": cmdManageHooks,
   };
   for (const [id, handler] of Object.entries(commands)) {
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
@@ -426,6 +438,7 @@ async function doFullInit(stacks: config.Stack[], projectName: string) {
 
   // Create default prompts and workflows
   prompts.createDefaults(config.gaitDir(cwd));
+  memory.createDefaults(config.gaitDir(cwd), cwd, newCfg);
   workflow.createDefaults(config.gaitDir(cwd));
 
   // Linter setup
@@ -844,7 +857,10 @@ async function cmdRunAgent() {
   }, 2000);
 
   try {
-    await agent.start(kind as any, prompt, cwd);
+    // Prepend agent memory to prompt
+    const memoryPrefix = memory.buildPromptPrefix(config.gaitDir(cwd));
+    const fullPrompt = memoryPrefix ? `${memoryPrefix}\n\n---\n\n${prompt}` : prompt;
+    await agent.start(kind as any, fullPrompt, cwd);
   } catch (err) {
     if (diffPollInterval) { clearInterval(diffPollInterval); diffPollInterval = undefined; }
     dashboard.addLog(`Failed to start agent: ${err}`, "error");
@@ -1187,6 +1203,7 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
 
     if (!fixed) {
       dashboard.addLog("Auto-fix exhausted all attempts", "error");
+      memory.addCorrection(config.gaitDir(cwd), failedStage.error.slice(0, 200), "Autofix failed after 3 attempts", "autofix");
       vscode.window.showWarningMessage("Auto-fix couldn't resolve the issue after 3 attempts.");
     }
   } else {
@@ -1439,6 +1456,195 @@ function sendNotify(event: import("./core/notify").NotifyEvent, message: string,
   git.branch(cwd).then((b) => { payload.branch = b; }).catch(() => {}).finally(() => {
     notify(notifyCfg, payload).catch(() => {});
   });
+}
+
+// --- Feature: Agent Memory ---
+
+async function cmdEditMemory() {
+  const contextPath = path.join(config.gaitDir(cwd), "context.md");
+  if (!fs.existsSync(contextPath)) {
+    if (cfg) memory.createDefaults(config.gaitDir(cwd), cwd, cfg);
+  }
+  const doc = await vscode.workspace.openTextDocument(contextPath);
+  await vscode.window.showTextDocument(doc);
+}
+
+async function cmdViewMemory() {
+  const mem = memory.loadMemory(config.gaitDir(cwd));
+  const ch = getOutputChannel("Gait: Memory");
+  ch.clear();
+  ch.appendLine(memory.formatMemory(mem));
+  ch.show(true);
+}
+
+// --- Feature: AI Code Review ---
+
+async function cmdCodeReview() {
+  if (!cfg) { vscode.window.showWarningMessage("Run 'Gait: Initialize Project' first."); return; }
+
+  dashboard.addLog("Running AI code review...", "info");
+
+  const diff = await git.diff(cwd, true).catch(() => "");
+  const unstaged = diff || await git.diff(cwd, false).catch(() => "");
+  if (!unstaged) { vscode.window.showInformationMessage("No changes to review."); return; }
+
+  const changedFiles = (await git.diffStat(cwd).catch(() => [])).map((s) => s.path);
+  const reviewCfg = (cfg as any).review ?? {};
+  const agentKind = reviewCfg.agent ?? "claude";
+
+  const result = await reviewDiff(cwd, config.gaitDir(cwd), unstaged, changedFiles, agentKind,
+    (line) => dashboard.addLog(`[review] ${line}`, "info"));
+
+  const dur = (result.duration / 1000).toFixed(1);
+  if (result.findings.length === 0) {
+    dashboard.addLog(`Code review passed — no issues (${dur}s)`, "success");
+    vscode.window.showInformationMessage("Code review: no issues found.");
+  } else {
+    const errors = result.findings.filter((f) => f.severity === "error").length;
+    const warnings = result.findings.filter((f) => f.severity === "warning").length;
+    dashboard.addLog(`Code review: ${errors} error(s), ${warnings} warning(s) (${dur}s)`, errors > 0 ? "error" : "warn");
+
+    const ch = getOutputChannel("Gait: Review");
+    ch.clear();
+    for (const f of result.findings) {
+      ch.appendLine(`[${f.severity.toUpperCase()}] ${f.file}:${f.line} — ${f.message}`);
+      if (f.suggestion) ch.appendLine(`  Suggestion: ${f.suggestion}`);
+    }
+    ch.show(true);
+
+    // Push diagnostics to VS Code
+    const diagCollection = vscode.languages.createDiagnosticCollection("gait-review");
+    const diagMap = new Map<string, vscode.Diagnostic[]>();
+    for (const f of result.findings) {
+      const uri = path.join(cwd, f.file);
+      const diags = diagMap.get(uri) ?? [];
+      const severity = f.severity === "error" ? vscode.DiagnosticSeverity.Error
+        : f.severity === "warning" ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information;
+      const range = new vscode.Range(Math.max(0, f.line - 1), 0, Math.max(0, f.line - 1), 1000);
+      const diag = new vscode.Diagnostic(range, f.message, severity);
+      diag.source = "gait-review";
+      diags.push(diag);
+      diagMap.set(uri, diags);
+    }
+    for (const [uri, diags] of diagMap) {
+      diagCollection.set(vscode.Uri.file(uri), diags);
+    }
+
+    const blockOn = reviewCfg.block_on ?? "error";
+    if (reviewShouldBlock(result.findings, blockOn)) {
+      vscode.window.showErrorMessage(`Code review blocked: ${errors} error-severity finding(s)`);
+    }
+  }
+}
+
+// --- Feature: Auto Test Generation ---
+
+async function cmdGenerateTests() {
+  if (!cfg) { vscode.window.showWarningMessage("Run 'Gait: Initialize Project' first."); return; }
+
+  const files = await vscode.window.showOpenDialog({
+    canSelectMany: false, openLabel: "Select source file",
+    filters: { "Source": ["ts", "js", "py", "go"] },
+  });
+  if (!files?.length) return;
+
+  const sourceFile = path.relative(cwd, files[0].fsPath);
+  const stack = Object.keys(cfg.stacks)[0] ?? "";
+  let testCmd = "";
+  for (const s of Object.values(cfg.stacks)) { if (s.Test) { testCmd = s.Test; break; } }
+
+  dashboard.addLog(`Generating tests for ${sourceFile}...`, "info");
+  const result = await generateTests(cwd, config.gaitDir(cwd), sourceFile, ["(all functions)"],
+    testCmd, "claude", (line) => dashboard.addLog(`[testgen] ${line}`, "info"));
+
+  if (result.passed) {
+    dashboard.addLog(`Tests generated and passing: ${result.testFile}`, "success");
+    const doc = await vscode.workspace.openTextDocument(path.join(cwd, result.testFile));
+    await vscode.window.showTextDocument(doc);
+    memory.addPattern(config.gaitDir(cwd), "testing", `Generated tests for ${sourceFile}`, "learned");
+  } else {
+    dashboard.addLog(`Generated tests failed: ${result.error}`, "error");
+    memory.addCorrection(config.gaitDir(cwd), `Test gen for ${sourceFile} failed`, result.error ?? "unknown", "autofix");
+    vscode.window.showWarningMessage(`Generated tests didn't pass. Reverted.`);
+  }
+}
+
+// --- Feature: Dependency Audit ---
+
+async function cmdAuditDeps() {
+  const stacks = config.detectStacks(cwd);
+  dashboard.addLog("Running dependency audit...", "info");
+  const result = await depAudit.audit(cwd, stacks);
+  const dur = (result.duration / 1000).toFixed(1);
+
+  if (result.error) {
+    dashboard.addLog(`Audit error: ${result.error}`, "error");
+    return;
+  }
+
+  if (result.findings.length === 0) {
+    dashboard.addLog(`Dependency audit passed (${dur}s)`, "success");
+    vscode.window.showInformationMessage("No vulnerabilities found.");
+  } else {
+    const ch = getOutputChannel("Gait: Audit");
+    ch.clear();
+    ch.appendLine(depAudit.formatFindings(result.findings));
+    ch.show(true);
+
+    const auditCfg = (cfg?.pipeline as any)?.audit ?? {};
+    const blockSeverity = auditCfg.block_severity ?? "high";
+    if (depAudit.shouldBlock(result.findings, blockSeverity)) {
+      dashboard.addLog(`Audit: ${result.findings.length} vulnerability(ies) — BLOCKED (${dur}s)`, "error");
+      const action = await vscode.window.showErrorMessage(
+        `${result.findings.length} vulnerability(ies) found. Auto-fix available?`,
+        "Auto-fix", "Ignore",
+      );
+      if (action === "Auto-fix") {
+        const fixResult = await depAudit.autoFix(cwd, stacks);
+        dashboard.addLog(`Auto-fix: ${fixResult.fixed} fixed, ${fixResult.errors.length} error(s)`, fixResult.errors.length ? "warn" : "success");
+      }
+    } else {
+      dashboard.addLog(`Audit: ${result.findings.length} finding(s), below threshold (${dur}s)`, "warn");
+    }
+  }
+}
+
+// --- Feature: Git Hooks Suite ---
+
+async function cmdInstallAllHooks() {
+  const { results } = hookScripts.installAll(cwd);
+  const installed = results.filter((r) => r.installed).length;
+  for (const r of results) {
+    dashboard.addLog(`Hook ${r.hook}: ${r.message}`, r.installed ? "success" : "warn");
+  }
+  vscode.window.showInformationMessage(`Installed ${installed}/4 hooks.`);
+}
+
+async function cmdManageHooks() {
+  const st = hookScripts.status(cwd);
+  const items = st.map((s) => ({
+    label: s.hook,
+    description: s.installed ? (s.managedByGait ? "installed (gait)" : "installed (custom)") : "not installed",
+    picked: s.installed && s.managedByGait,
+    hookStatus: s,
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    placeHolder: "Select hooks to install (deselect to uninstall)",
+  });
+  if (!picked) return;
+
+  const wantInstalled = new Set(picked.map((p) => p.label));
+  for (const s of st) {
+    if (wantInstalled.has(s.hook) && !s.managedByGait) {
+      hookScripts.install(cwd, s.hook);
+      dashboard.addLog(`Installed ${s.hook}`, "success");
+    } else if (!wantInstalled.has(s.hook) && s.managedByGait) {
+      hookScripts.uninstall(cwd, s.hook);
+      dashboard.addLog(`Uninstalled ${s.hook}`, "info");
+    }
+  }
 }
 
 function cap(s: string): string {
