@@ -99,6 +99,7 @@
     "views": {
       "gait": [
         { "id": "gait.pipeline", "name": "Pipeline" },
+        { "id": "gait.scripts", "name": "Scripts" },
         { "id": "gait.actions", "name": "Quick Actions" },
         { "id": "gait.info", "name": "Project" }
       ]

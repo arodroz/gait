@@ -60,11 +60,18 @@ export function listScripts(scriptsDir: string): Script[] {
     .map((f) => parseScript(path.join(scriptsDir, f)));
 }
 
+export interface ScriptRunResult {
+  passed: boolean;
+  output: string;
+  error: string;
+  duration: number;
+}
+
 /** Run a script and return pass/fail */
 export async function runScript(
   script: Script,
   cwd: string,
-): Promise<{ passed: boolean; output: string; error: string; duration: number }> {
+): Promise<ScriptRunResult> {
   const result = await run("bash", [script.path], cwd, script.timeout);
   const expectExit = script.expect === "exit:0" ? 0 : parseInt(script.expect.split(":")[1] ?? "0", 10);
   return {
@@ -73,6 +80,47 @@ export async function runScript(
     error: result.stderr,
     duration: result.duration,
   };
+}
+
+/**
+ * Run a script with dependency resolution.
+ * Runs dependencies first (in order), stops on first failure.
+ */
+export async function runWithDeps(
+  script: Script,
+  allScripts: Script[],
+  cwd: string,
+  onRun?: (name: string) => void,
+): Promise<{ results: { name: string; result: ScriptRunResult }[]; allPassed: boolean }> {
+  const scriptMap = new Map(allScripts.map((s) => [s.name, s]));
+  const visited = new Set<string>();
+  const results: { name: string; result: ScriptRunResult }[] = [];
+  let allPassed = true;
+
+  async function execute(s: Script): Promise<boolean> {
+    if (visited.has(s.name)) return true;
+    visited.add(s.name);
+
+    // Run dependencies first
+    for (const depName of s.depends) {
+      const dep = scriptMap.get(depName);
+      if (!dep) continue;
+      const ok = await execute(dep);
+      if (!ok) return false;
+    }
+
+    onRun?.(s.name);
+    const result = await runScript(s, cwd);
+    results.push({ name: s.name, result });
+    if (!result.passed) {
+      allPassed = false;
+      return false;
+    }
+    return true;
+  }
+
+  await execute(script);
+  return { results, allPassed };
 }
 
 /** Generate a default script file content */

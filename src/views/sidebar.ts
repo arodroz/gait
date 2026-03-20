@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { StageName, StageStatus, StageResult } from "../core/pipeline";
+import type { Script } from "../core/scripts";
 
 // ── Pipeline Tree ──
 
@@ -240,6 +241,49 @@ class InfoItem extends vscode.TreeItem {
     this.description = value;
     this.iconPath = new vscode.ThemeIcon(icon);
     this.tooltip = `${label}: ${value}`;
+  }
+}
+
+// ── Scripts Tree ──
+
+export class ScriptsTreeProvider implements vscode.TreeDataProvider<ScriptItem> {
+  private _onDidChange = new vscode.EventEmitter<ScriptItem | undefined>();
+  readonly onDidChangeTreeData = this._onDidChange.event;
+
+  private scripts: Script[] = [];
+
+  update(scripts: Script[]): void {
+    this.scripts = scripts;
+    this._onDidChange.fire(undefined);
+  }
+
+  getTreeItem(element: ScriptItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(): ScriptItem[] {
+    return this.scripts.map((s) => new ScriptItem(s));
+  }
+}
+
+class ScriptItem extends vscode.TreeItem {
+  constructor(script: Script) {
+    super(script.name, vscode.TreeItemCollapsibleState.None);
+    this.description = script.description;
+    this.iconPath = new vscode.ThemeIcon("terminal");
+    this.tooltip = this.buildTooltip(script);
+    this.command = { command: "gait.runScript", title: "Run Script" };
+    this.contextValue = "script";
+  }
+
+  private buildTooltip(s: Script): vscode.MarkdownString {
+    const md = new vscode.MarkdownString();
+    md.appendMarkdown(`**${s.name}**`);
+    if (s.description) md.appendMarkdown(` \u2014 ${s.description}`);
+    md.appendMarkdown("\n\n");
+    if (s.depends.length) md.appendMarkdown(`Depends: ${s.depends.join(", ")}\n\n`);
+    md.appendMarkdown(`Timeout: ${s.timeout / 1000}s \u00B7 Expect: ${s.expect}`);
+    return md;
   }
 }
 

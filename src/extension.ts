@@ -23,13 +23,14 @@ import { parseTestOutput } from "./core/test-parser";
 import { AgentRunner } from "./core/agent";
 import { buildFixPrompt, runAutofixLoop } from "./core/autofix";
 import { StatusBarManager } from "./views/statusbar";
-import { PipelineTreeProvider, ActionsTreeProvider, InfoTreeProvider } from "./views/sidebar";
+import { PipelineTreeProvider, ActionsTreeProvider, InfoTreeProvider, ScriptsTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
 
 let statusBar: StatusBarManager;
 let pipelineTree: PipelineTreeProvider;
 let actionsTree: ActionsTreeProvider;
 let infoTree: InfoTreeProvider;
+let scriptsTree: ScriptsTreeProvider;
 let dashboard: DashboardPanel;
 let cfg: config.Config | undefined;
 let cwd: string;
@@ -46,6 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
   pipelineTree = new PipelineTreeProvider();
   actionsTree = new ActionsTreeProvider();
   infoTree = new InfoTreeProvider();
+  scriptsTree = new ScriptsTreeProvider();
   dashboard = new DashboardPanel(context.extensionUri);
   agent = new AgentRunner();
 
@@ -53,6 +55,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("gait.pipeline", pipelineTree),
     vscode.window.registerTreeDataProvider("gait.actions", actionsTree),
+    vscode.window.registerTreeDataProvider("gait.scripts", scriptsTree),
     vscode.window.registerTreeDataProvider("gait.info", infoTree),
   );
 
@@ -192,6 +195,7 @@ function loadConfig() {
     const stages = cfg.pipeline.stages as StageName[];
     statusBar.resetAll(stages);
     pipelineTree.reset(stages);
+    scriptsTree.update(scripts.listScripts(path.join(cwd, config.DOT_DIR, config.SCRIPTS_DIR)));
     updateDashboardInfo();
   } catch (err) {
     vscode.window.showErrorMessage(`Gait: failed to load config: ${err}`);
@@ -862,22 +866,42 @@ async function cmdRunScript() {
   const picked = await vscode.window.showQuickPick(items, { placeHolder: "Select script to run" });
   if (!picked) return;
 
-  dashboard.addLog(`Running script "${picked.script.name}"...`, "info");
-  const result = await scripts.runScript(picked.script, cwd);
-  const dur = (result.duration / 1000).toFixed(1);
-
-  if (result.passed) {
-    dashboard.addLog(`Script "${picked.script.name}" passed (${dur}s)`, "success");
-    vscode.window.showInformationMessage(`Script "${picked.script.name}" passed (${dur}s)`);
+  const hasDeps = picked.script.depends.length > 0;
+  if (hasDeps) {
+    dashboard.addLog(`Running "${picked.script.name}" with deps: ${picked.script.depends.join(" → ")} → ${picked.script.name}`, "info");
   } else {
-    dashboard.addLog(`Script "${picked.script.name}" FAILED (${dur}s)`, "error");
-    const ch = getOutputChannel(`Gait: Script`);
-    ch.clear();
-    if (result.error) ch.appendLine(result.error);
-    if (result.output) ch.appendLine(result.output);
-    ch.show(true);
+    dashboard.addLog(`Running script "${picked.script.name}"...`, "info");
   }
-  logHistory("stage_run", { script: picked.script.name, passed: result.passed, duration: result.duration });
+
+  const { results, allPassed } = await scripts.runWithDeps(
+    picked.script,
+    available,
+    cwd,
+    (name) => dashboard.addLog(`  Running dep: ${name}...`, "info"),
+  );
+
+  for (const { name, result } of results) {
+    const dur = (result.duration / 1000).toFixed(1);
+    if (result.passed) {
+      dashboard.addLog(`  ${name} passed (${dur}s)`, "success");
+    } else {
+      dashboard.addLog(`  ${name} FAILED (${dur}s)`, "error");
+      const ch = getOutputChannel(`Gait: Script`);
+      ch.clear();
+      if (result.error) ch.appendLine(result.error);
+      if (result.output) ch.appendLine(result.output);
+      ch.show(true);
+    }
+  }
+
+  const totalDur = results.reduce((s, r) => s + r.result.duration, 0);
+  if (allPassed) {
+    vscode.window.showInformationMessage(`Script "${picked.script.name}" passed (${(totalDur / 1000).toFixed(1)}s)`);
+  } else {
+    const failed = results.filter((r) => !r.result.passed).map((r) => r.name);
+    vscode.window.showErrorMessage(`Script failed: ${failed.join(", ")}`);
+  }
+  logHistory("stage_run", { script: picked.script.name, passed: allPassed, duration: totalDur });
 }
 
 async function cmdListScripts() {

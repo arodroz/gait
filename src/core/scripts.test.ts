@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { parseScript, listScripts, generateScript, createDefaults, runScript } from "./scripts";
+import { parseScript, listScripts, generateScript, createDefaults, runScript, runWithDeps } from "./scripts";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "gait-scripts-"));
@@ -104,5 +104,47 @@ describe("runScript", () => {
     const script = parseScript(p);
     const result = await runScript(script, dir);
     expect(result.passed).toBe(false);
+  });
+});
+
+describe("runWithDeps", () => {
+  it("runs dependencies before the script", async () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, "lint.sh"), "#!/bin/bash\n# gait:name lint\necho lint-ok", { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, "test.sh"), "#!/bin/bash\n# gait:name test\n# gait:depends lint\necho test-ok", { mode: 0o755 });
+
+    const all = listScripts(dir);
+    const test = all.find((s) => s.name === "test")!;
+    const { results, allPassed } = await runWithDeps(test, all, dir);
+
+    expect(allPassed).toBe(true);
+    expect(results.length).toBe(2);
+    expect(results[0].name).toBe("lint");
+    expect(results[1].name).toBe("test");
+  });
+
+  it("stops on dep failure", async () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, "lint.sh"), "#!/bin/bash\n# gait:name lint\nexit 1", { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, "test.sh"), "#!/bin/bash\n# gait:name test\n# gait:depends lint\necho test", { mode: 0o755 });
+
+    const all = listScripts(dir);
+    const test = all.find((s) => s.name === "test")!;
+    const { results, allPassed } = await runWithDeps(test, all, dir);
+
+    expect(allPassed).toBe(false);
+    expect(results.length).toBe(1); // only lint ran, test was skipped
+    expect(results[0].name).toBe("lint");
+  });
+
+  it("runs script with no deps directly", async () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, "build.sh"), "#!/bin/bash\n# gait:name build\necho built", { mode: 0o755 });
+
+    const all = listScripts(dir);
+    const { results, allPassed } = await runWithDeps(all[0], all, dir);
+
+    expect(allPassed).toBe(true);
+    expect(results.length).toBe(1);
   });
 });
