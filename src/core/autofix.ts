@@ -24,7 +24,7 @@ export interface AutofixCallbacks {
  * Build a targeted fix prompt from a failed stage result.
  * Includes error output, relevant file paths, and source context.
  */
-export function buildFixPrompt(failed: StageResult, cwd: string, stageCommand?: string): string {
+export function buildFixPrompt(failed: StageResult, cwd: string, stageCommand?: string, blameContext?: string): string {
   const lines: string[] = [];
 
   lines.push(`The "${failed.name}" stage failed. Fix the error below.`);
@@ -85,6 +85,11 @@ export function buildFixPrompt(failed: StageResult, cwd: string, stageCommand?: 
   lines.push("- Do not add features");
   lines.push("- Make the minimal change needed to make the stage pass");
 
+  if (blameContext) {
+    lines.push("");
+    lines.push(blameContext);
+  }
+
   return lines.join("\n");
 }
 
@@ -100,9 +105,10 @@ export async function runAutofixLoop(
   runGate: () => Promise<boolean>,
   callbacks: AutofixCallbacks,
   stageCommand?: string,
+  blameContext?: string,
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const prompt = buildFixPrompt(failed, cwd, stageCommand);
+    const prompt = buildFixPrompt(failed, cwd, stageCommand, blameContext);
     callbacks.onAttemptStart(attempt, maxAttempts, prompt);
 
     const agent = new AgentRunner();

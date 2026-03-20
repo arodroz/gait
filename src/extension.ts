@@ -16,6 +16,8 @@ import * as monorepo from "./core/monorepo";
 import { ensureLinterSetup } from "./core/linter-setup";
 import { runPipeline, runStage, type StageName } from "./core/pipeline";
 import { run } from "./core/runner";
+import { parseDuration } from "./core/util";
+import * as impact from "./core/impact";
 import { HistoryLogger } from "./core/history";
 import { BaselineStore } from "./core/baseline";
 import { FlakyTracker } from "./core/flaky";
@@ -128,8 +130,16 @@ export function activate(context: vscode.ExtensionContext) {
         dashboard.updateState({ commitGateOpen: false });
         break;
       case "requestState":
-        // Re-push current state (for section collapse re-render)
         dashboard.updateState({});
+        break;
+      case "switchProfile":
+        await cmdSwitchProfile();
+        break;
+      case "restoreSnapshot":
+        await cmdRestoreSnapshot();
+        break;
+      case "createPR":
+        await cmdCreatePR();
         break;
       case "fixStage":
         await cmdFixStage(msg.data as string, false);
@@ -175,10 +185,13 @@ export function activate(context: vscode.ExtensionContext) {
   if (config.configExists(cwd)) {
     const hookInterval = setInterval(() => {
       if (hooks.checkHookTrigger(config.gaitDir(cwd))) {
-        // Open dashboard with commit gate modal
+        // Commit hook always uses full profile
+        const savedProfile = currentProfile;
+        currentProfile = (cfg?.pipeline as any)?.commit_profile ?? "full";
         dashboard.open();
         dashboard.updateState({ commitGateOpen: true });
         cmdGate().then((passed) => {
+          currentProfile = savedProfile; // restore
           dashboard.updateState({ commitGateOpen: true }); // keep modal open with results
           hooks.writeHookResult(config.gaitDir(cwd), passed !== false);
         });
@@ -197,8 +210,11 @@ export function activate(context: vscode.ExtensionContext) {
     });
   });
   agent.on("done", async (_code: number, duration: number) => {
-    // Stop diff polling
     if (diffPollInterval) { clearInterval(diffPollInterval); diffPollInterval = undefined; }
+
+    // Prune old snapshots (24h default)
+    const retention = parseDuration((cfg?.pipeline as any)?.snapshot_retention ?? "24h");
+    snapshot.prune(cwd, config.gaitDir(cwd), retention).catch(() => {});
 
     const dur = (duration / 1000).toFixed(1);
     const tokens = agent.estimateTokens();
@@ -226,8 +242,9 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     logHistory("agent_session", { kind: agentKind, prompt: taskDesc, duration, tokens });
+    sendNotify("agent.done", `Agent ${agentKind} finished (${dur}s)`, { tokens, duration: dur });
 
-    // Notifications
+    // Gate notifications
     sendNotify(gatePassed ? "gate.passed" : "gate.failed",
       `Agent ${agentKind} finished — gate ${gatePassed ? "passed" : "failed"}`,
       { duration: dur, tokens, files: stats.length });
@@ -564,6 +581,8 @@ async function cmdGate(): Promise<boolean> {
     if (cfg?.pipeline.autofix && failedStages.length > 0) {
       const agentKind = (cfg.pipeline.autofix_agent ?? "claude") as import("./core/agent").AgentKind;
       const maxAttempts = cfg.pipeline.autofix_max_attempts ?? 3;
+      const autoBlame = await blameError(cwd, failedStages[0].error + "\n" + failedStages[0].output);
+      const autoBlameCtx = autoBlame ? enhancePromptWithBlame("", autoBlame) : undefined;
       dashboard.addLog(`Autofix enabled — launching ${agentKind} (max ${maxAttempts} attempts)`, "info");
       const fixed = await runAutofixLoop(
         failedStages[0], cwd, agentKind, maxAttempts,
@@ -582,6 +601,7 @@ async function cmdGate(): Promise<boolean> {
           onGateResult: (passed) => { if (passed) dashboard.addLog("Gate passed after autofix!", "success"); },
         },
         getStageCommand(failedStages[0].name as StageName),
+        autoBlameCtx,
       );
       if (fixed) return true;
     }
@@ -628,6 +648,7 @@ async function cmdGate(): Promise<boolean> {
             dashboard.addLog(`  REGRESSION: ${r}`, "error");
           }
           dashboard.updateState({ regressions, flakyTests: flakyList });
+          sendNotify("regression.detected", `${regressions.length} regression(s) detected`, { regressions: regressions.slice(0, 5) });
         } else {
           dashboard.updateState({ regressions: [], flakyTests: flakyList });
         }
@@ -644,6 +665,19 @@ async function cmdGate(): Promise<boolean> {
       }
     }
   } catch { /* baseline check is best-effort */ }
+
+  // Test impact analysis — log which tests were relevant
+  try {
+    const gaitDirPath = config.gaitDir(cwd);
+    const impactMap = impact.load(gaitDirPath);
+    const changedFiles = (await git.diffStat(cwd).catch(() => [])).map((s) => s.path);
+    if (impactMap && changedFiles.length > 0) {
+      const affected = impact.affectedTests(impactMap, changedFiles);
+      if (affected.isScoped) {
+        dashboard.addLog(`Impact: ${affected.files.length} test file(s) affected by changes`, "info");
+      }
+    }
+  } catch { /* impact analysis is best-effort */ }
 
   // Untested new code detection
   try {
@@ -800,7 +834,11 @@ async function cmdRunAgent() {
     const diffs = await getCurrentDiffs(cwd);
     if (diffs.length > 0) {
       dashboard.updateState({
-        files: diffs.map((d) => ({ path: d.file, additions: 0, deletions: 0, status: "modified" })),
+        files: diffs.map((d) => {
+          const adds = (d.hunks.match(/^\+[^+]/gm) || []).length;
+          const dels = (d.hunks.match(/^-[^-]/gm) || []).length;
+          return { path: d.file, additions: adds, deletions: dels, status: "modified" };
+        }),
       });
     }
   }, 2000);
@@ -1116,8 +1154,11 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
   const stageCmd = getStageCommand(stageName as StageName);
 
   if (autoLoop) {
-    // Option B: auto-fix loop
+    // Option B: auto-fix loop (with blame)
+    const blameInfo = await blameError(cwd, failedStage.error + "\n" + failedStage.output);
+    const blameCtx = blameInfo ? enhancePromptWithBlame("", blameInfo) : undefined;
     dashboard.addLog(`Auto-fix loop: ${stageName} (max 3 attempts)`, "info");
+    if (blameInfo) dashboard.addLog(`Blame: ${blameInfo.commitHash.slice(0, 8)} by ${blameInfo.author}`, "info");
     const fixed = await runAutofixLoop(
       failedStage, cwd, agentKind as any, 3,
       () => cmdGate(),
@@ -1141,6 +1182,7 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
         },
       },
       stageCmd,
+      blameCtx,
     );
 
     if (!fixed) {
