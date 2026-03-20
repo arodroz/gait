@@ -19,6 +19,23 @@ export interface DashboardState {
   agentPaused?: boolean;
   agentKind?: string;
   agentPrompt?: string;
+  agentTokens?: number;
+  agentContextPct?: number;
+  agentElapsed?: number;
+  // Post-task review
+  review?: {
+    taskDesc: string;
+    agentKind: string;
+    duration: number;
+    tokens: number;
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+    gatePassed: boolean;
+  };
+  // Regressions from baseline
+  regressions?: string[];
+  flakyTests?: string[];
 }
 
 export interface LogEntry {

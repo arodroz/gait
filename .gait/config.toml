@@ -2,11 +2,11 @@
 name = "gait"
 
 [stacks.typescript]
-Lint = "npx tsc --noEmit"
+Lint = "npx eslint ."
 Test = "npx vitest run"
 Typecheck = "npx tsc --noEmit"
-Build = "node_modules/.bin/esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node"
+Build = "npm run build"
 
 [pipeline]
-stages = ["lint", "typecheck", "test"]
+stages = ["lint","typecheck","test"]
 timeout = "300s"

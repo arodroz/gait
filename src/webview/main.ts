@@ -45,6 +45,21 @@ interface DashboardState {
   agentPaused?: boolean;
   agentKind?: string;
   agentPrompt?: string;
+  agentTokens?: number;
+  agentContextPct?: number;
+  agentElapsed?: number;
+  review?: {
+    taskDesc: string;
+    agentKind: string;
+    duration: number;
+    tokens: number;
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+    gatePassed: boolean;
+  };
+  regressions?: string[];
+  flakyTests?: string[];
 }
 
 const STAGE_ICONS: Record<string, string> = {
@@ -209,6 +224,18 @@ function buildAgentPanel(state: DashboardState): HTMLElement | null {
     indicator.style.fontWeight = "600";
     section.appendChild(indicator);
 
+    // Token/context stats
+    if (state.agentTokens || state.agentContextPct) {
+      const pct = state.agentContextPct ?? 0;
+      const filled = Math.round(pct / 10);
+      const bar = "\u2588".repeat(filled) + "\u2591".repeat(10 - filled);
+      const elapsed = state.agentElapsed ? `${Math.round(state.agentElapsed / 1000)}s` : "";
+      const tokens = state.agentTokens ? `~${(state.agentTokens / 1000).toFixed(1)}k tokens` : "";
+      const statsLine = el("div", { style: "color: var(--muted); margin-top: 4px; font-family: var(--vscode-editor-font-family);" },
+        `  ctx: ${pct}% ${bar}  ${tokens}  ${elapsed}`);
+      section.appendChild(statsLine);
+    }
+
     if (state.agentPrompt) {
       const prompt = el("div", { style: "color: var(--muted); margin-top: 4px; font-style: italic;" },
         `"${state.agentPrompt.length > 60 ? state.agentPrompt.slice(0, 60) + "..." : state.agentPrompt}"`);
@@ -221,8 +248,43 @@ function buildAgentPanel(state: DashboardState): HTMLElement | null {
   return section;
 }
 
+function buildRegressions(state: DashboardState): HTMLElement | null {
+  if (!state.regressions?.length) return null;
+  const section = el("div", { className: "section" });
+  section.appendChild(el("div", { className: "section-title", style: "color: var(--error);" },
+    `Regressions \u2014 ${state.regressions.length} test(s) now failing`));
+  for (const name of state.regressions) {
+    section.appendChild(el("div", { style: "color: var(--error); margin-left: 8px;" }, `\u2717 ${name}`));
+  }
+  if (state.flakyTests?.length) {
+    section.appendChild(el("div", { style: "color: var(--warn); margin-top: 8px;" },
+      `${state.flakyTests.length} flaky test(s) exempted`));
+  }
+  return section;
+}
+
+function buildReview(state: DashboardState): HTMLElement | null {
+  if (!state.review) return null;
+  const r = state.review;
+  const section = el("div", { className: "section" });
+  section.appendChild(el("div", { className: "section-title" }, "Post-Task Review"));
+
+  const dur = (r.duration / 1000).toFixed(1);
+  const tokens = r.tokens > 0 ? `${(r.tokens / 1000).toFixed(1)}k tokens` : "";
+  section.appendChild(el("div", {}, `Task: "${r.taskDesc}"`));
+  section.appendChild(el("div", { style: "color: var(--muted);" },
+    `Agent: ${r.agentKind}  Duration: ${dur}s  ${tokens}`));
+  section.appendChild(el("div", { style: "margin-top: 4px;" },
+    `Changes: ${r.filesChanged} file(s)  +${r.additions} -${r.deletions}`));
+
+  const gateEl = el("div", { style: `margin-top: 4px; font-weight: 600; color: var(--${r.gatePassed ? "success" : "error"});` },
+    `Gate: ${r.gatePassed ? "\u2713 PASSED" : "\u2717 FAILED"}`);
+  section.appendChild(gateEl);
+
+  return section;
+}
+
 function renderToDOM(container: HTMLElement, state: DashboardState): void {
-  // Clear safely
   while (container.firstChild) container.removeChild(container.firstChild);
 
   container.appendChild(buildHeader(state));
@@ -230,10 +292,16 @@ function renderToDOM(container: HTMLElement, state: DashboardState): void {
   const banner = buildGateBanner(state);
   if (banner) container.appendChild(banner);
 
+  const regressions = buildRegressions(state);
+  if (regressions) container.appendChild(regressions);
+
   if (state.stages.length) container.appendChild(buildStages(state.stages));
 
   const agentPanel = buildAgentPanel(state);
   if (agentPanel) container.appendChild(agentPanel);
+
+  const review = buildReview(state);
+  if (review) container.appendChild(review);
 
   const files = buildFiles(state.files);
   if (files) container.appendChild(files);

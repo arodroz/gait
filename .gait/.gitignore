@@ -2,3 +2,6 @@ baseline_*.json
 coverage.json
 flaky.json
 history/
+.hook-trigger
+.hook-result
+.lock

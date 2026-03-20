@@ -12,8 +12,11 @@ import * as agentsmd from "./core/agentsmd";
 import * as recover from "./core/recover";
 import * as scripts from "./core/scripts";
 import * as scriptDetect from "./core/script-detect";
+import * as monorepo from "./core/monorepo";
 import { runPipeline, runStage, type StageName } from "./core/pipeline";
 import { HistoryLogger } from "./core/history";
+import { BaselineStore } from "./core/baseline";
+import { FlakyTracker } from "./core/flaky";
 import { AgentRunner } from "./core/agent";
 import { StatusBarManager } from "./views/statusbar";
 import { PipelineTreeProvider } from "./views/sidebar";
@@ -108,13 +111,42 @@ export function activate(context: vscode.ExtensionContext) {
   // Agent event wiring
   agent.on("output", (line: string) => {
     dashboard.addLog(`[agent] ${line}`, "info");
+    // Push live stats to dashboard
+    dashboard.updateState({
+      agentTokens: agent.estimateTokens(),
+      agentContextPct: agent.estimateContextPct(),
+      agentElapsed: agent.elapsed(),
+    });
   });
-  agent.on("done", (_code: number, duration: number) => {
+  agent.on("done", async (_code: number, duration: number) => {
     const dur = (duration / 1000).toFixed(1);
-    dashboard.addLog(`Agent finished (${dur}s)`, "success");
-    dashboard.updateState({ agentRunning: false, agentPaused: false });
+    const tokens = agent.estimateTokens();
+    const taskDesc = agent.currentSession?.prompt ?? "";
+    const agentKind = agent.currentSession?.kind ?? "";
+    dashboard.addLog(`Agent finished (${dur}s, ~${(tokens / 1000).toFixed(1)}k tokens)`, "success");
+    dashboard.updateState({ agentRunning: false, agentPaused: false, agentTokens: tokens });
+
     // Auto-pipeline after agent
-    cmdGate();
+    const gatePassed = await cmdGate();
+
+    // Build post-task review
+    const stats = await git.diffStat(cwd).catch(() => []);
+    const totalAdd = stats.reduce((s, f) => s + f.additions, 0);
+    const totalDel = stats.reduce((s, f) => s + f.deletions, 0);
+    dashboard.updateState({
+      review: {
+        taskDesc,
+        agentKind,
+        duration,
+        tokens,
+        filesChanged: stats.length,
+        additions: totalAdd,
+        deletions: totalDel,
+        gatePassed: gatePassed !== false,
+      },
+    });
+
+    logHistory("agent_session", { kind: agentKind, prompt: taskDesc, duration, tokens });
   });
   agent.on("error", (err: string) => {
     dashboard.addLog(`Agent error: ${err}`, "error");
@@ -143,6 +175,13 @@ async function updateDashboardInfo() {
   const branchName = await git.branch(cwd).catch(() => "");
   const clean = await git.isClean(cwd).catch(() => true);
   const stacks = config.detectStacks(cwd);
+
+  // Detect monorepo workspaces
+  const workspaces = monorepo.detect(cwd);
+  if (workspaces.length > 1) {
+    dashboard.addLog(`Monorepo: ${workspaces.length} workspaces (${workspaces.map((w) => w.name).join(", ")})`, "info");
+  }
+
   dashboard.updateState({
     project: cfg.project.name,
     version: "0.0.0",
@@ -270,6 +309,32 @@ async function cmdGate(): Promise<boolean> {
     stages: result.stages.map((s) => ({ name: s.name, status: s.status, duration: s.duration })),
   });
 
+  // Regression detection against baseline
+  try {
+    const branchName = await git.branch(cwd).catch(() => "main");
+    const gaitDirPath = config.gaitDir(cwd);
+    const baselineStore = new BaselineStore(gaitDirPath);
+    const flakyTracker = new FlakyTracker(gaitDirPath);
+
+    // Parse test stage output for test names (basic: count pass/fail lines)
+    const testStage = result.stages.find((s) => s.name === "test");
+    if (testStage && testStage.status !== "skipped") {
+      // Update flaky tracker and check regressions
+      const report = baselineStore.diff([], branchName); // empty until we have a test parser
+      const flakyList = flakyTracker.flakyTests();
+      const regressions = report.regressions
+        .map((r) => `${r.package}/${r.name}`)
+        .filter((name) => !flakyTracker.isFlaky(name));
+
+      if (regressions.length > 0) {
+        dashboard.addLog(`${regressions.length} regression(s) detected`, "error");
+        dashboard.updateState({ regressions, flakyTests: flakyList });
+      } else {
+        dashboard.updateState({ regressions: [], flakyTests: flakyList });
+      }
+    }
+  } catch { /* baseline check is best-effort */ }
+
   return result.passed;
 }
 
@@ -332,7 +397,19 @@ async function cmdRunAgent() {
     return;
   }
 
-  const kind = await vscode.window.showQuickPick(["claude", "codex"], { placeHolder: "Select agent" });
+  // Offline mode: check which agents are available
+  const available: string[] = [];
+  const claudeCheck = await prereq.commandExists("claude");
+  const codexCheck = await prereq.commandExists("codex");
+  if (claudeCheck.passed) available.push("claude");
+  if (codexCheck.passed) available.push("codex");
+
+  if (available.length === 0) {
+    vscode.window.showWarningMessage("No AI agents found on PATH. Install claude or codex to use agent features.");
+    return;
+  }
+
+  const kind = await vscode.window.showQuickPick(available, { placeHolder: "Select agent" });
   if (!kind) return;
 
   const prompt = await vscode.window.showInputBox({ prompt: "Enter prompt for the agent", placeHolder: "Fix the failing test..." });
