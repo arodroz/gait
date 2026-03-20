@@ -19,7 +19,7 @@ describe("buildFixPrompt", () => {
       duration: 500,
     };
     const prompt = buildFixPrompt(failed, tmpDir());
-    expect(prompt).toContain("lint stage failed");
+    expect(prompt).toContain('"lint" stage failed');
     expect(prompt).toContain("TS2345");
     expect(prompt).toContain("Fix ONLY the error");
   });

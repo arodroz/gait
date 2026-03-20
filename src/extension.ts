@@ -346,6 +346,7 @@ async function cmdGate(): Promise<boolean> {
           onGateStart: () => dashboard.addLog("Re-running gate...", "info"),
           onGateResult: (passed) => { if (passed) dashboard.addLog("Gate passed after autofix!", "success"); },
         },
+        getStageCommand(failedStages[0].name as StageName),
       );
       if (fixed) return true;
     }
@@ -767,6 +768,9 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
     : await vscode.window.showQuickPick(available, { placeHolder: "Select agent to fix" });
   if (!agentKind) return;
 
+  // Find the command gait uses for this stage
+  const stageCmd = getStageCommand(stageName as StageName);
+
   if (autoLoop) {
     // Option B: auto-fix loop
     dashboard.addLog(`Auto-fix loop: ${stageName} (max 3 attempts)`, "info");
@@ -774,7 +778,7 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
       failedStage, cwd, agentKind as any, 3,
       () => cmdGate(),
       {
-        onAttemptStart: (n, max, _prompt) => {
+        onAttemptStart: (n, max) => {
           dashboard.addLog(`Fix attempt ${n}/${max}...`, "info");
           dashboard.updateState({ agentRunning: true, agentKind, agentPaused: false });
         },
@@ -792,6 +796,7 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
           if (passed) dashboard.addLog("Gate passed after fix!", "success");
         },
       },
+      stageCmd,
     );
 
     if (!fixed) {
@@ -799,18 +804,20 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
       vscode.window.showWarningMessage("Auto-fix couldn't resolve the issue after 3 attempts.");
     }
   } else {
-    // Option C: scoped fix — build prompt, let user review, then send
-    const prompt = buildFixPrompt(failedStage, cwd);
+    // Option C: scoped fix — full prompt with optional extra context
+    const fullPrompt = buildFixPrompt(failedStage, cwd, stageCmd);
 
-    const userPrompt = await vscode.window.showInputBox({
-      prompt: "Review/edit the fix prompt (or press Enter to send as-is)",
-      value: `Fix the ${stageName} failure`,
-      placeHolder: "Fix prompt...",
+    const extraContext = await vscode.window.showInputBox({
+      prompt: "Add extra context for the agent (optional, press Enter to send as-is)",
+      placeHolder: "e.g., 'The error is in the config parser' or leave empty",
     });
-    if (userPrompt === undefined) return; // cancelled
+    if (extraContext === undefined) return; // cancelled
 
-    const finalPrompt = userPrompt || prompt;
-    dashboard.addLog(`Sending fix to ${agentKind}...`, "info");
+    const finalPrompt = extraContext
+      ? `${extraContext}\n\n---\n\n${fullPrompt}`
+      : fullPrompt;
+
+    dashboard.addLog(`Sending fix to ${agentKind} (${stageCmd || stageName})...`, "info");
     dashboard.updateState({
       agentRunning: true,
       agentKind,
@@ -820,12 +827,23 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
 
     try {
       await agent.start(agentKind as any, finalPrompt, cwd);
-      // The existing agent.on("done") handler will auto-run the gate
     } catch (err) {
       dashboard.addLog(`Fix agent failed to start: ${err}`, "error");
       dashboard.updateState({ agentRunning: false });
     }
   }
+}
+
+function getStageCommand(name: StageName): string {
+  if (!cfg) return "";
+  const keyMap: Record<StageName, keyof config.StackCommands> = {
+    lint: "Lint", test: "Test", typecheck: "Typecheck", build: "Build",
+  };
+  for (const stack of Object.values(cfg.stacks)) {
+    const key = keyMap[name];
+    if (key && stack[key]) return stack[key];
+  }
+  return "";
 }
 
 function cap(s: string): string {
