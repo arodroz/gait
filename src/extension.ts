@@ -13,6 +13,7 @@ import * as recover from "./core/recover";
 import * as scripts from "./core/scripts";
 import * as scriptDetect from "./core/script-detect";
 import * as monorepo from "./core/monorepo";
+import { ensureLinterSetup } from "./core/linter-setup";
 import { runPipeline, runStage, type StageName } from "./core/pipeline";
 import { HistoryLogger } from "./core/history";
 import { BaselineStore } from "./core/baseline";
@@ -263,9 +264,19 @@ async function cmdInit() {
   // Create default scripts
   scripts.createDefaults(path.join(cwd, config.DOT_DIR, config.SCRIPTS_DIR), newCfg.stacks);
 
+  // Set up linter configs and install deps
+  const linterResult = await ensureLinterSetup(cwd, stacks);
+  const linterMsg: string[] = [];
+  if (linterResult.created.length) linterMsg.push(`created: ${linterResult.created.join(", ")}`);
+  if (linterResult.installed.length) linterMsg.push(`installed: ${linterResult.installed.join(", ")}`);
+  if (linterResult.skipped.length) linterMsg.push(`skipped: ${linterResult.skipped.join(", ")}`);
+
   vscode.commands.executeCommand("setContext", "gait.initialized", true);
   loadConfig();
-  vscode.window.showInformationMessage(`Gait initialized! Stacks: ${stacks.join(", ") || "none detected"}`);
+
+  const stackNames = stacks.join(", ") || "none detected";
+  const linterInfo = linterMsg.length ? ` | Linter: ${linterMsg.join("; ")}` : "";
+  vscode.window.showInformationMessage(`Gait initialized! Stacks: ${stackNames}${linterInfo}`);
 }
 
 async function cmdGate(): Promise<boolean> {
