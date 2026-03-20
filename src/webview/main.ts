@@ -314,9 +314,33 @@ function buildFiles(files: FileChange[]): HTMLElement | null {
   const list = el("div", { className: "file-list" });
   for (const f of files) {
     const row = el("div", { className: "file-row" });
-    row.appendChild(el("span", { className: "file-path" }, f.path));
+
+    // File path — click for diff, cmd+click to jump to first change
+    const pathEl = el("span", { className: "file-path", title: "Click: diff \u00B7 Cmd+Click: go to change" }, f.path);
+    pathEl.style.cursor = "pointer";
+    pathEl.addEventListener("click", (e) => {
+      if ((e as MouseEvent).metaKey || (e as MouseEvent).ctrlKey) {
+        vscode.postMessage({ command: "openFileAtChange", data: f.path });
+      } else {
+        vscode.postMessage({ command: "openDiff", data: f.path });
+      }
+    });
+    row.appendChild(pathEl);
+
     row.appendChild(el("span", { className: "file-add" }, `+${f.additions}`));
     row.appendChild(el("span", { className: "file-del" }, `-${f.deletions}`));
+
+    // Open file icon
+    const openBtn = el("span", {
+      className: "file-open",
+      title: "Open file",
+      style: "cursor: pointer; opacity: 0.4; margin-left: 4px; font-size: 0.9em;",
+    }, "\u2197");
+    openBtn.addEventListener("click", () => {
+      vscode.postMessage({ command: "openFile", data: f.path });
+    });
+    row.appendChild(openBtn);
+
     list.appendChild(row);
   }
   return collapsibleSection("files", [

@@ -473,7 +473,9 @@ export class DashboardPanel {
       padding: 3px 0;
       line-height: 1.6;
     }
-    .file-path { flex: 1; color: var(--fg); opacity: 0.8; }
+    .file-path { flex: 1; color: var(--fg); opacity: 0.8; transition: opacity 0.1s; }
+    .file-path:hover { opacity: 1; color: var(--accent); text-decoration: underline; }
+    .file-open:hover { opacity: 1 !important; }
     .file-add { color: var(--success); min-width: 32px; text-align: right; }
     .file-del { color: var(--error); min-width: 32px; text-align: right; }
 

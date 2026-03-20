@@ -118,6 +118,30 @@ export function activate(context: vscode.ExtensionContext) {
       case "autofixStage":
         await cmdFixStage(msg.data as string, true);
         break;
+      case "openDiff": {
+        const filePath = msg.data as string;
+        const uri = vscode.Uri.file(path.join(cwd, filePath));
+        await vscode.commands.executeCommand("git.openChange", uri);
+        break;
+      }
+      case "openFile": {
+        const filePath = msg.data as string;
+        const doc = await vscode.workspace.openTextDocument(path.join(cwd, filePath));
+        await vscode.window.showTextDocument(doc);
+        break;
+      }
+      case "openFileAtChange": {
+        const filePath = msg.data as string;
+        const firstLine = await getFirstChangedLine(filePath);
+        const doc = await vscode.workspace.openTextDocument(path.join(cwd, filePath));
+        const editor = await vscode.window.showTextDocument(doc);
+        if (firstLine > 0) {
+          const pos = new vscode.Position(firstLine - 1, 0);
+          editor.selection = new vscode.Selection(pos, pos);
+          editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+        }
+        break;
+      }
     }
   });
 
@@ -1066,6 +1090,17 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
       dashboard.addLog(`Fix agent failed to start: ${err}`, "error");
       dashboard.updateState({ agentRunning: false });
     }
+  }
+}
+
+async function getFirstChangedLine(filePath: string): Promise<number> {
+  try {
+    const result = await run("git", ["diff", "-U0", filePath], cwd, 10_000);
+    // Parse unified diff for first @@ hunk header: @@ -a,b +c,d @@
+    const match = result.stdout.match(/@@ -\d+(?:,\d+)? \+(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
+  } catch {
+    return 0;
   }
 }
 
