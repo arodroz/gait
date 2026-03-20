@@ -34,7 +34,9 @@ export interface DashboardState {
   };
   regressions?: string[];
   flakyTests?: string[];
-  // Commit gate modal
+  coverage?: { file: string; name: string }[];
+  coverageStatus?: "running" | "done" | "error";
+  coverageError?: string;
   commitGateOpen?: boolean;
 }
 

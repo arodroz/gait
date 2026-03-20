@@ -15,6 +15,7 @@ import * as scriptDetect from "./core/script-detect";
 import * as monorepo from "./core/monorepo";
 import { ensureLinterSetup } from "./core/linter-setup";
 import { runPipeline, runStage, type StageName } from "./core/pipeline";
+import { run } from "./core/runner";
 import { HistoryLogger } from "./core/history";
 import { BaselineStore } from "./core/baseline";
 import { FlakyTracker } from "./core/flaky";
@@ -106,6 +107,10 @@ export function activate(context: vscode.ExtensionContext) {
         break;
       case "commitGateClose":
         dashboard.updateState({ commitGateOpen: false });
+        break;
+      case "requestState":
+        // Re-push current state (for section collapse re-render)
+        dashboard.updateState({});
         break;
       case "fixStage":
         await cmdFixStage(msg.data as string, false);
@@ -228,9 +233,13 @@ async function updateDashboardInfo() {
     );
   }
 
+  // Get version from latest git tag
+  const tagResult = await run("git", ["describe", "--tags", "--abbrev=0"], cwd, 5000).catch(() => null);
+  const version = tagResult?.exitCode === 0 ? tagResult.stdout.trim().replace(/^v/, "") : "0.0.0";
+
   dashboard.updateState({
     project: cfg.project.name,
-    version: "0.0.0",
+    version,
     branch: branchName,
     stacks,
     clean,
@@ -582,9 +591,11 @@ async function cmdGate(): Promise<boolean> {
     if (changedFiles.length > 0 && cfg) {
       const stack = Object.keys(cfg.stacks)[0] ?? "";
       dashboard.addLog(`Running coverage analysis (${stack})...`, "info");
+      dashboard.updateState({ coverageStatus: "running" });
       const covResult = await findUntested(cwd, changedFiles, stack);
       if (covResult.error) {
         dashboard.addLog(`Coverage: ${covResult.error}`, "warn");
+        dashboard.updateState({ coverageStatus: "error", coverageError: covResult.error, coverage: [] });
       } else if (covResult.uncovered.length > 0) {
         dashboard.addLog(`${covResult.uncovered.length} function(s) without test coverage`, "warn");
         for (const u of covResult.uncovered.slice(0, 5)) {
@@ -593,8 +604,10 @@ async function cmdGate(): Promise<boolean> {
         if (covResult.uncovered.length > 5) {
           dashboard.addLog(`  ...and ${covResult.uncovered.length - 5} more`, "warn");
         }
+        dashboard.updateState({ coverageStatus: "done", coverage: covResult.uncovered, coverageError: undefined });
       } else {
         dashboard.addLog(`Coverage: all changed functions are tested`, "success");
+        dashboard.updateState({ coverageStatus: "done", coverage: [], coverageError: undefined });
       }
     }
   } catch (err) {

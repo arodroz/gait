@@ -60,8 +60,14 @@ interface DashboardState {
   };
   regressions?: string[];
   flakyTests?: string[];
+  coverage?: { file: string; name: string }[];
+  coverageStatus?: "running" | "done" | "error";
+  coverageError?: string;
   commitGateOpen?: boolean;
 }
+
+// Track collapsed sections
+const collapsedSections = new Set<string>();
 
 // --- Helpers ---
 
@@ -241,19 +247,69 @@ function buildReview(state: DashboardState): HTMLElement | null {
   return panel;
 }
 
+/** Create a collapsible section with header + content body */
+function collapsibleSection(id: string, labelParts: (Node | string)[], content: HTMLElement): HTMLElement {
+  const section = el("div", { className: "section" });
+  const isCollapsed = collapsedSections.has(id);
+
+  const header = el("div", { className: `section-header${isCollapsed ? " collapsed" : ""}` });
+  header.appendChild(el("span", { className: "chevron" }, isCollapsed ? "\u25B8" : "\u25BE"));
+  for (const p of labelParts) {
+    if (typeof p === "string") header.appendChild(el("span", {}, p));
+    else header.appendChild(p);
+  }
+  header.addEventListener("click", () => {
+    if (collapsedSections.has(id)) collapsedSections.delete(id);
+    else collapsedSections.add(id);
+    // Re-render by requesting state again
+    vscode.postMessage({ command: "requestState" });
+  });
+  section.appendChild(header);
+
+  if (!isCollapsed) section.appendChild(content);
+  return section;
+}
+
+function buildCoverage(state: DashboardState): HTMLElement | null {
+  if (!state.coverageStatus) return null;
+
+  if (state.coverageStatus === "running") {
+    const body = el("div", { style: "color: var(--muted); font-size: 0.85em; padding: 4px 0;" }, "Analyzing coverage...");
+    return collapsibleSection("coverage", ["Coverage"], body);
+  }
+
+  if (state.coverageError) {
+    const body = el("div", { style: "color: var(--warn); font-size: 0.85em;" }, state.coverageError);
+    return collapsibleSection("coverage", [
+      "Coverage",
+      el("span", { className: "count", style: "color: var(--warn);" }, "!"),
+    ], body);
+  }
+
+  const items = state.coverage ?? [];
+  if (items.length === 0 && state.coverageStatus === "done") {
+    const body = el("div", { style: "color: var(--success); font-size: 0.85em;" }, "\u2713 All changed functions are tested");
+    return collapsibleSection("coverage", ["Coverage"], body);
+  }
+
+  const body = el("div", { style: "font-family: var(--vscode-editor-font-family); font-size: 0.8em;" });
+  for (const item of items.slice(0, 10)) {
+    body.appendChild(el("div", { style: "color: var(--warn); padding: 2px 0;" },
+      `\u25CB ${item.file}:${item.name}`));
+  }
+  if (items.length > 10) {
+    body.appendChild(el("div", { style: "color: var(--muted);" }, `\u2026 and ${items.length - 10} more`));
+  }
+  return collapsibleSection("coverage", [
+    "Coverage",
+    el("span", { className: "count", style: "color: var(--warn);" }, `${items.length}`),
+  ], body);
+}
+
 function buildFiles(files: FileChange[]): HTMLElement | null {
   if (!files.length) return null;
   const totalAdd = files.reduce((s, f) => s + f.additions, 0);
   const totalDel = files.reduce((s, f) => s + f.deletions, 0);
-
-  const section = el("div", { className: "section" });
-  const header = el("div", { className: "section-header" });
-  header.appendChild(el("span", { className: "chevron" }, "\u25BE"));
-  header.appendChild(el("span", {}, "Files"));
-  header.appendChild(el("span", { className: "count" }, `${files.length}`));
-  header.appendChild(el("span", { style: "color: var(--success); font-size: 1em;" }, `+${totalAdd}`));
-  header.appendChild(el("span", { style: "color: var(--error); font-size: 1em;" }, `-${totalDel}`));
-  section.appendChild(header);
 
   const list = el("div", { className: "file-list" });
   for (const f of files) {
@@ -263,18 +319,15 @@ function buildFiles(files: FileChange[]): HTMLElement | null {
     row.appendChild(el("span", { className: "file-del" }, `-${f.deletions}`));
     list.appendChild(row);
   }
-  section.appendChild(list);
-  return section;
+  return collapsibleSection("files", [
+    "Files",
+    el("span", { className: "count" }, `${files.length}`),
+    el("span", { style: "color: var(--success); font-size: 1em;" }, `+${totalAdd}`),
+    el("span", { style: "color: var(--error); font-size: 1em;" }, `-${totalDel}`),
+  ], list);
 }
 
 function buildLog(log: LogEntry[]): HTMLElement {
-  const section = el("div", { className: "section" });
-  const header = el("div", { className: "section-header" });
-  header.appendChild(el("span", { className: "chevron" }, "\u25BE"));
-  header.appendChild(el("span", {}, "Log"));
-  if (log.length) header.appendChild(el("span", { className: "count" }, `${log.length}`));
-  section.appendChild(header);
-
   const logDiv = el("div", { className: "log" });
   if (!log.length) {
     logDiv.appendChild(el("div", { className: "log-empty" }, "No events yet"));
@@ -286,8 +339,9 @@ function buildLog(log: LogEntry[]): HTMLElement {
       logDiv.appendChild(row);
     }
   }
-  section.appendChild(logDiv);
-  return section;
+  const labelParts: (Node | string)[] = ["Log"];
+  if (log.length) labelParts.push(el("span", { className: "count" }, `${log.length}`));
+  return collapsibleSection("log", labelParts, logDiv);
 }
 
 function buildActions(state: DashboardState): HTMLElement {
@@ -385,6 +439,9 @@ function renderToDOM(container: HTMLElement, state: DashboardState): void {
 
   const review = buildReview(state);
   if (review) dashboard.appendChild(review);
+
+  const coverage = buildCoverage(state);
+  if (coverage) dashboard.appendChild(coverage);
 
   const files = buildFiles(state.files);
   if (files) dashboard.appendChild(files);
