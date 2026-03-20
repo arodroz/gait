@@ -127,9 +127,27 @@ function buildStages(stages: StageResult[]): HTMLElement {
     if (s.duration > 0) {
       badge.appendChild(el("span", { className: "dur" }, `${(s.duration / 1000).toFixed(1)}s`));
     }
-    badge.addEventListener("click", () => {
-      vscode.postMessage({ command: "runStage", data: s.name });
-    });
+
+    if (s.status === "failed") {
+      // Fix button (click = scoped fix, shift+click = auto-fix loop)
+      const fixBtn = el("span", {
+        style: "margin-left: 6px; cursor: pointer; font-size: 0.8em; padding: 1px 6px; border: 1px solid var(--error); border-radius: 3px; color: var(--error);",
+        title: "Click to fix with agent. Shift+click for auto-fix loop.",
+      }, "Fix");
+      fixBtn.addEventListener("click", (e) => {
+        if ((e as MouseEvent).shiftKey) {
+          vscode.postMessage({ command: "autofixStage", data: s.name });
+        } else {
+          vscode.postMessage({ command: "fixStage", data: s.name });
+        }
+      });
+      badge.appendChild(fixBtn);
+    } else {
+      badge.addEventListener("click", () => {
+        vscode.postMessage({ command: "runStage", data: s.name });
+      });
+    }
+
     container.appendChild(badge);
   }
   return container;

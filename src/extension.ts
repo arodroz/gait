@@ -19,6 +19,7 @@ import { BaselineStore } from "./core/baseline";
 import { FlakyTracker } from "./core/flaky";
 import { findUntested } from "./core/coverage";
 import { AgentRunner } from "./core/agent";
+import { buildFixPrompt, runAutofixLoop } from "./core/autofix";
 import { StatusBarManager } from "./views/statusbar";
 import { PipelineTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
@@ -28,6 +29,7 @@ let pipelineTree: PipelineTreeProvider;
 let dashboard: DashboardPanel;
 let cfg: config.Config | undefined;
 let cwd: string;
+let lastPipelineResult: import("./core/pipeline").PipelineResult | undefined;
 let agent: AgentRunner;
 const outputChannels = new Map<string, vscode.OutputChannel>();
 
@@ -93,6 +95,12 @@ export function activate(context: vscode.ExtensionContext) {
         break;
       case "commitGateClose":
         dashboard.updateState({ commitGateOpen: false });
+        break;
+      case "fixStage":
+        await cmdFixStage(msg.data as string, false);
+        break;
+      case "autofixStage":
+        await cmdFixStage(msg.data as string, true);
         break;
     }
   });
@@ -303,6 +311,7 @@ async function cmdGate(): Promise<boolean> {
     },
   });
 
+  lastPipelineResult = result;
   statusBar.setGateStatus(result.passed, result.duration);
   dashboard.setPipelineResult(result);
 
@@ -311,9 +320,35 @@ async function cmdGate(): Promise<boolean> {
     dashboard.addLog(`Pipeline PASSED (${dur}s)`, "success");
     vscode.window.showInformationMessage(`Gait: Pipeline passed (${dur}s)`);
   } else {
-    const failed = result.stages.filter((s) => s.status === "failed").map((s) => s.name);
+    const failedStages = result.stages.filter((s) => s.status === "failed");
+    const failed = failedStages.map((s) => s.name);
     dashboard.addLog(`Pipeline FAILED [${failed.join(", ")}] (${dur}s)`, "error");
     vscode.window.showErrorMessage(`Gait: Pipeline failed — ${failed.join(", ")}`);
+
+    // Option D: auto-fix when config says so
+    if (cfg?.pipeline.autofix && failedStages.length > 0) {
+      const agentKind = (cfg.pipeline.autofix_agent ?? "claude") as import("./core/agent").AgentKind;
+      const maxAttempts = cfg.pipeline.autofix_max_attempts ?? 3;
+      dashboard.addLog(`Autofix enabled — launching ${agentKind} (max ${maxAttempts} attempts)`, "info");
+      const fixed = await runAutofixLoop(
+        failedStages[0], cwd, agentKind, maxAttempts,
+        () => cmdGate(),
+        {
+          onAttemptStart: (n, max) => {
+            dashboard.addLog(`Autofix attempt ${n}/${max}...`, "info");
+            dashboard.updateState({ agentRunning: true, agentKind: agentKind, agentPaused: false });
+          },
+          onAttemptEnd: (r) => {
+            dashboard.updateState({ agentRunning: false });
+            dashboard.addLog(r.success ? `Fixed on attempt ${r.attempt}` : `Attempt ${r.attempt} failed`, r.success ? "success" : "warn");
+          },
+          onAgentOutput: (line) => dashboard.addLog(`[autofix] ${line}`, "info"),
+          onGateStart: () => dashboard.addLog("Re-running gate...", "info"),
+          onGateResult: (passed) => { if (passed) dashboard.addLog("Gate passed after autofix!", "success"); },
+        },
+      );
+      if (fixed) return true;
+    }
   }
 
   logHistory("pipeline_run", {
@@ -702,6 +737,95 @@ async function cmdDetectScripts() {
     dashboard.addLog(`Created script: ${suggestion.filename}`, "success");
   }
   vscode.window.showInformationMessage(`Created ${picked.length} script(s) in .gait/scripts/`);
+}
+
+async function cmdFixStage(stageName: string, autoLoop: boolean) {
+  // Find the failed stage result from last gate run
+  // We need to get it from the dashboard state — store last pipeline result
+  const failedStage = lastPipelineResult?.stages.find(
+    (s) => s.name === stageName && s.status === "failed",
+  );
+  if (!failedStage) {
+    vscode.window.showWarningMessage(`No failure data for stage '${stageName}'`);
+    return;
+  }
+
+  // Check agent availability
+  const claudeCheck = await prereq.commandExists("claude");
+  const codexCheck = await prereq.commandExists("codex");
+  const available: string[] = [];
+  if (claudeCheck.passed) available.push("claude");
+  if (codexCheck.passed) available.push("codex");
+
+  if (available.length === 0) {
+    vscode.window.showWarningMessage("No AI agents on PATH. Install claude or codex.");
+    return;
+  }
+
+  const agentKind = available.length === 1
+    ? available[0]
+    : await vscode.window.showQuickPick(available, { placeHolder: "Select agent to fix" });
+  if (!agentKind) return;
+
+  if (autoLoop) {
+    // Option B: auto-fix loop
+    dashboard.addLog(`Auto-fix loop: ${stageName} (max 3 attempts)`, "info");
+    const fixed = await runAutofixLoop(
+      failedStage, cwd, agentKind as any, 3,
+      () => cmdGate(),
+      {
+        onAttemptStart: (n, max, _prompt) => {
+          dashboard.addLog(`Fix attempt ${n}/${max}...`, "info");
+          dashboard.updateState({ agentRunning: true, agentKind, agentPaused: false });
+        },
+        onAttemptEnd: (result) => {
+          dashboard.updateState({ agentRunning: false });
+          if (result.success) {
+            dashboard.addLog(`Fixed on attempt ${result.attempt}!`, "success");
+          } else {
+            dashboard.addLog(`Attempt ${result.attempt} failed`, "warn");
+          }
+        },
+        onAgentOutput: (line) => dashboard.addLog(`[fix] ${line}`, "info"),
+        onGateStart: () => dashboard.addLog("Re-running gate...", "info"),
+        onGateResult: (passed) => {
+          if (passed) dashboard.addLog("Gate passed after fix!", "success");
+        },
+      },
+    );
+
+    if (!fixed) {
+      dashboard.addLog("Auto-fix exhausted all attempts", "error");
+      vscode.window.showWarningMessage("Auto-fix couldn't resolve the issue after 3 attempts.");
+    }
+  } else {
+    // Option C: scoped fix — build prompt, let user review, then send
+    const prompt = buildFixPrompt(failedStage, cwd);
+
+    const userPrompt = await vscode.window.showInputBox({
+      prompt: "Review/edit the fix prompt (or press Enter to send as-is)",
+      value: `Fix the ${stageName} failure`,
+      placeHolder: "Fix prompt...",
+    });
+    if (userPrompt === undefined) return; // cancelled
+
+    const finalPrompt = userPrompt || prompt;
+    dashboard.addLog(`Sending fix to ${agentKind}...`, "info");
+    dashboard.updateState({
+      agentRunning: true,
+      agentKind,
+      agentPrompt: `Fix: ${stageName}`,
+      agentPaused: false,
+    });
+
+    try {
+      await agent.start(agentKind as any, finalPrompt, cwd);
+      // The existing agent.on("done") handler will auto-run the gate
+    } catch (err) {
+      dashboard.addLog(`Fix agent failed to start: ${err}`, "error");
+      dashboard.updateState({ agentRunning: false });
+    }
+  }
 }
 
 function cap(s: string): string {

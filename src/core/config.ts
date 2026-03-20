@@ -18,6 +18,9 @@ export interface StackCommands {
 export interface PipelineConfig {
   stages: string[];
   timeout: string;
+  autofix?: boolean;
+  autofix_max_attempts?: number;
+  autofix_agent?: string;
 }
 
 export interface Config {
