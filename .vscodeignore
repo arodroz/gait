@@ -1,0 +1,7 @@
+src/**
+node_modules/**
+.gait/**
+*.md
+!README.md
+tsconfig.json
+.gitignore
