@@ -4,7 +4,7 @@
 
 **Core philosophy: nothing ships without proof it doesn't break things.**
 
-gait sits between you and your codebase. It runs your lint, typecheck, and tests before every commit. It scans for secrets. It tracks regressions. It monitors AI agents in real time and kills them if they go off the rails. It simulates rollbacks in isolated worktrees before touching your working tree.
+gait sits between you and your codebase. It runs your lint, typecheck, and tests before every commit. It scans for secrets. It tracks regressions. It monitors AI agents in real time and kills them if they go off the rails. It simulates rollbacks in isolated worktrees before touching your working tree. When something fails, it can send the error to an agent and fix it automatically.
 
 ---
 
@@ -15,12 +15,14 @@ gait sits between you and your codebase. It runs your lint, typecheck, and tests
 - [Dashboard](#dashboard)
 - [Commands](#commands)
 - [Quality Gate](#quality-gate)
+- [Autofix](#autofix)
 - [Secret Scanning](#secret-scanning)
 - [Pre-Commit Hook](#pre-commit-hook)
 - [AI Agent Integration](#ai-agent-integration)
 - [Rollback Assistant](#rollback-assistant)
 - [Release Flow](#release-flow)
 - [Regression Detection](#regression-detection)
+- [Coverage Detection](#coverage-detection)
 - [Monorepo Support](#monorepo-support)
 - [Script Management](#script-management)
 - [Configuration](#configuration)
@@ -35,7 +37,7 @@ gait sits between you and your codebase. It runs your lint, typecheck, and tests
 ### From Source
 
 ```bash
-git clone https://github.com/tuni/gait.git
+git clone https://github.com/arodroz/gait.git
 cd gait
 npm install
 npm run compile
@@ -60,25 +62,31 @@ code --install-extension gait-0.1.0.vsix
 3. `Cmd+Shift+P` → **Gait: Open Dashboard**
 4. `Cmd+Shift+G` to run the full quality gate
 
-gait auto-detects your stack (Go, Python, TypeScript, Swift) from manifest files and configures lint/test/build commands. Everything is stored in `.gait/config.toml` — commit it so your team shares the same gate.
+`gait init` auto-detects your stack (Go, Python, TypeScript, Swift), configures lint/test/build commands, creates default scripts, and sets up linter configs (ESLint, golangci-lint, ruff, swiftlint) with appropriate rules. Everything is stored in `.gait/` — commit the config and scripts so your team shares the same gate.
+
+**Re-running `gait init`** on an existing project is safe. It asks you to choose:
+- **Re-initialize** — overwrites config with fresh defaults (backs up existing `config.toml`)
+- **Merge** — keeps existing config, only adds missing stacks and scripts
+- **Cancel** — do nothing
 
 ---
 
 ## Dashboard
 
-The webview dashboard is the main interface. Open it with `Cmd+Shift+D` or **Gait: Open Dashboard**.
+The webview dashboard is the main interface. Open it with **Gait: Open Dashboard** (`Cmd+Shift+D`, available after init).
 
 **What it shows:**
 
-- **Header** — project name, version, branch, clean/dirty status, stack badges
-- **Stage badges** — clickable; shows status (pending/running/passed/failed) with timing
+- **Header** — project name, branch, clean/dirty indicator, stack badges
 - **Gate result banner** — green PASSED or red BLOCKED after a gate run
-- **Agent panel** — when an agent is running: kind, prompt, pause/resume/kill controls
+- **Regression warnings** — tests that were passing but now fail, with flaky test exemptions
+- **Stage badges** — clickable; shows status (pending/running/passed/failed) with timing. Failed stages show a **Fix** button.
+- **Agent panel** — when an agent is running: kind, prompt, elapsed time, estimated token count, context window usage bar, pause/resume/kill controls
+- **Post-task review** — after an agent finishes: task description, agent kind, duration, tokens, file changes summary, gate pass/fail
 - **Changed files** — live git diff stats (files, additions, deletions)
 - **Event log** — timestamped history of every action, scrollable, color-coded by level
-- **Action bar** — Run Gate, Lint, Test, Typecheck, Build, Agent, Rollback, Release
-
-The dashboard buttons are context-aware: stages without configured commands are hidden, and agent controls appear only when an agent is active.
+- **Commit gate modal** — full-screen overlay triggered by pre-commit hook with per-stage results and Commit/Cancel buttons
+- **Action bar** — Run Gate, individual stage buttons, Agent, Rollback, Release (only shows buttons for configured stages)
 
 ---
 
@@ -88,9 +96,9 @@ All commands are available via `Cmd+Shift+P`:
 
 | Command | Keybinding | Description |
 |---------|-----------|-------------|
-| **Gait: Initialize Project** | — | Create `.gait/` config from detected stacks |
-| **Gait: Run Quality Gate** | `Cmd+Shift+G` | Full pipeline: lint → typecheck → test, with secret scan |
-| **Gait: Open Dashboard** | `Cmd+Shift+D` | Open the webview dashboard panel |
+| **Gait: Initialize Project** | — | Create `.gait/` config, scripts, and linter configs from detected stacks |
+| **Gait: Run Quality Gate** | `Cmd+Shift+G` | Full pipeline + secret scan + regression check + coverage detection |
+| **Gait: Open Dashboard** | `Cmd+Shift+D`* | Open the webview dashboard panel |
 | **Gait: Run Lint** | — | Run lint stage only |
 | **Gait: Run Tests** | — | Run test stage only |
 | **Gait: Run Typecheck** | — | Run typecheck stage only |
@@ -106,6 +114,8 @@ All commands are available via `Cmd+Shift+P`:
 | **Gait: Generate AGENTS.md** | — | Create AGENTS.md from config for AI agents |
 | **Gait: Recover (Cleanup)** | — | Remove stale worktrees, lock files, temp dirs |
 
+*`Cmd+Shift+D` is only active after `gait init` has been run (`gait.initialized` context).
+
 ---
 
 ## Quality Gate
@@ -120,18 +130,50 @@ If lint fails, typecheck and test are skipped. Each stage shells out to the comm
 
 ```toml
 [stacks.typescript]
-Lint = "npx tsc --noEmit"
+Lint = "npx eslint src/"
 Test = "npx vitest run"
 Typecheck = "npx tsc --noEmit"
 Build = "npm run build"
 ```
 
-The gate also scans staged diffs for secrets before running the pipeline. If secrets are found, the gate blocks immediately.
+The gate also:
+1. **Scans staged diffs for secrets** before running the pipeline
+2. **Checks for regressions** against the branch baseline after tests run
+3. **Detects untested new code** by running coverage and cross-referencing changed files
 
 Results appear in three places:
 - **Status bar** — live badges with spinners while running
 - **Sidebar** — tree view with pass/fail icons
 - **Dashboard** — full detail with timing, log entries, and error output
+
+---
+
+## Autofix
+
+When a stage fails, gait can send the error to an AI agent and fix it automatically. Three modes, layered by trust level:
+
+### Click "Fix" on a failed stage badge
+
+Builds a targeted prompt containing the exact error output, the command that was run, source code of referenced files, and strict minimal-fix instructions. You can add extra context before sending. The agent fixes the code, then the gate re-runs automatically.
+
+### Shift+click "Fix" — Auto-fix loop
+
+Agent fixes → gate re-runs → repeat up to 3 attempts or until green. No human in the loop.
+
+### Config flag — Fully automatic
+
+Add to `.gait/config.toml`:
+
+```toml
+[pipeline]
+stages = ["lint", "typecheck", "test"]
+timeout = "300s"
+autofix = true
+autofix_max_attempts = 3
+autofix_agent = "claude"
+```
+
+When `autofix = true`, every gate failure automatically triggers the fix loop.
 
 ---
 
@@ -160,11 +202,15 @@ If any finding is detected, the gate blocks and shows the findings in the dashbo
 Cmd+Shift+P → Gait: Install Pre-Commit Hook
 ```
 
-This writes a hook to `.git/hooks/pre-commit` that signals the VS Code extension to run the gate. The hook waits for the result and blocks the commit if the gate fails.
+Writes a hook to `.git/hooks/pre-commit` that signals the VS Code extension to run the gate. When triggered:
 
-- The hook creates `.gait/.hook-trigger` → the extension picks it up → runs the gate → writes `.gait/.hook-result` (pass/fail) → the hook reads it and exits 0 or 1.
-- To bypass: `git commit --no-verify`
-- To uninstall: delete `.git/hooks/pre-commit`
+1. The hook creates `.gait/.hook-trigger`
+2. The extension detects it, opens the dashboard, and runs the gate
+3. A **commit gate modal** appears in the dashboard with per-stage results and a pass/fail banner
+4. If passed: click **Commit** to allow, or **Cancel** to abort
+5. The extension writes `.gait/.hook-result` (pass/fail) → the hook reads it and exits 0 or 1
+
+To bypass: `git commit --no-verify`. To uninstall: delete `.git/hooks/pre-commit`.
 
 ---
 
@@ -174,18 +220,30 @@ This writes a hook to `.git/hooks/pre-commit` that signals the VS Code extension
 Cmd+Shift+P → Gait: Run Agent
 ```
 
-1. Pick an agent: **Claude** (`claude -p`) or **Codex** (`codex`)
-2. Enter a prompt
-3. The agent runs in the background; output streams to the dashboard log
+1. gait checks which agents are available on PATH (graceful degradation if none installed)
+2. Pick an agent: **Claude** or **Codex**
+3. Enter a prompt
+4. The agent runs in the background with file write permissions
+
+**How agents are invoked:**
+- **Claude**: `claude -p '<prompt>' --allowedTools Edit Write Bash Read Glob Grep`
+- **Codex**: `codex --full-auto '<prompt>'`
+
+**Dashboard agent panel** shows:
+- Agent kind and status (running/paused)
+- Current prompt
+- Estimated token count (~20 tokens per output line)
+- Context window usage bar (% of 200k)
+- Elapsed time
 
 **Mid-flight controls** (appear in dashboard when agent is active):
 - **Pause** — sends `SIGSTOP` to freeze the agent process
 - **Resume** — sends `SIGCONT` to continue
 - **Kill** — sends `SIGKILL` to terminate immediately
 
-**Post-task auto-pipeline:** when the agent finishes, gait automatically runs the full quality gate to verify the agent's changes didn't break anything.
+**Post-task auto-pipeline:** when the agent finishes, gait automatically runs the full quality gate.
 
-**Token/context estimation:** gait tracks output lines as a proxy for token usage (~20 tokens/line) and estimates context window usage against a 200k token budget.
+**Post-task review:** the dashboard shows a summary of the agent session: task description, duration, token usage, files changed (+/-), and whether the gate passed.
 
 ---
 
@@ -195,12 +253,12 @@ Cmd+Shift+P → Gait: Run Agent
 Cmd+Shift+P → Gait: Rollback Assistant
 ```
 
-1. Pick a recent commit to revert from a quick pick list
+1. Pick a recent commit from a quick pick list
 2. gait creates a **temporary git worktree** (isolated copy of the repo)
-3. Reverts the commit in the worktree
+3. Reverts the commit in the worktree with `git revert --no-commit`
 4. Runs your test suite there
 5. Reports: files affected, tests pass/fail, whether it's safe to revert
-6. If safe, you can apply the revert to your real working tree
+6. If safe: click **Revert** to apply to your real working tree
 
 This means you see the impact of a revert **before** it touches your code. If the revert would cause test failures, gait warns you and does not apply it.
 
@@ -223,12 +281,10 @@ Cmd+Shift+P → Gait: Release
    | `feat:` | **minor** |
    | `feat!:`, `BREAKING CHANGE` | **major** |
 
-5. Generates a grouped markdown changelog
+5. Shows the changelog and version analysis in an output channel
 6. Runs the quality gate
-7. Asks: **Tag Only** or **Tag + Push**
+7. Asks: **Tag Only**, **Tag + Push**, or **Cancel**
 8. Creates an annotated git tag
-
-The changelog and version analysis are shown in an output channel before you confirm.
 
 ---
 
@@ -241,9 +297,23 @@ gait tracks test baselines per branch as JSON files in `.gait/`:
 - **New test** — a test that doesn't exist in the baseline
 - **Branch-aware** — each branch gets its own baseline file (`baseline_main.json`, `baseline_feat_login.json`)
 
-The `BaselineStore` provides a `diff()` method that compares current results against the baseline and categorizes every test.
+After every gate run, gait diffs current results against the baseline and surfaces regressions in the dashboard.
 
-**Flaky test tracking:** tests that flip between pass and fail 3+ times are flagged as flaky and can be exempted from regression alerts. The `FlakyTracker` persists flip counts in `.gait/flaky.json`.
+**Flaky test tracking:** tests that flip between pass and fail 3+ times are flagged as flaky and exempted from regression alerts. Flip counts persist in `.gait/flaky.json`.
+
+---
+
+## Coverage Detection
+
+After every gate run, gait checks whether new or modified functions have test coverage. It runs the appropriate coverage tool per stack:
+
+| Stack | Coverage tool |
+|-------|--------------|
+| **Go** | `go test -coverprofile` + `go tool cover -func` |
+| **TypeScript** | `vitest --coverage` with JSON reporter |
+| **Python** | `pytest --cov --cov-report=json` |
+
+Changed files (from git diff) are cross-referenced with coverage data. Uncovered functions are logged as warnings in the dashboard.
 
 ---
 
@@ -257,7 +327,7 @@ gait detects workspace configurations:
 | **npm/yarn** | `package.json` `"workspaces"` field |
 | **Python** | Subdirectories containing `pyproject.toml` |
 
-The `affected()` function takes a list of changed files and returns only the workspaces that contain those changes — so you can run tests for affected packages only, instead of the full suite.
+Detected workspaces are logged when the dashboard opens. The `affected()` function takes changed files and returns only affected workspaces for scoped testing.
 
 ---
 
@@ -321,15 +391,33 @@ Build = "npm run build"
 [pipeline]
 stages = ["lint", "typecheck", "test"]
 timeout = "300s"
+
+# Optional: auto-fix failed stages with an AI agent
+# autofix = true
+# autofix_max_attempts = 3
+# autofix_agent = "claude"
 ```
 
 **Multi-stack:** projects with both `go.mod` and `package.json` get both stacks configured. The pipeline uses the first non-empty command it finds per stage across all stacks.
+
+### Linter Setup
+
+`gait init` also creates linter configs when none exist:
+
+| Stack | Config file created |
+|-------|-------------------|
+| **TypeScript** | `eslint.config.js` + installs `eslint`, `@typescript-eslint/parser`, `@typescript-eslint/eslint-plugin` |
+| **Go** | `.golangci.yml` |
+| **Python** | `ruff.toml` |
+| **Swift** | `.swiftlint.yml` |
+
+Existing configs are never overwritten. Stub files (< 30 chars) are treated as empty and replaced.
 
 ### `.gait/` Directory
 
 | File | Git | Purpose |
 |------|-----|---------|
-| `config.toml` | **committed** | Pipeline and stack configuration |
+| `config.toml` | **committed** | Pipeline, stack, and autofix configuration |
 | `scripts/*.sh` | **committed** | Repeatable operations with metadata |
 | `.gitignore` | **committed** | Keeps state files out of git |
 | `baseline_*.json` | gitignored | Test baseline per branch |
@@ -345,17 +433,20 @@ timeout = "300s"
 
 ```
 src/
-├── extension.ts                ← VS Code entry point, command wiring
+├── extension.ts                ← VS Code entry point, command wiring, lifecycle
 ├── core/
-│   ├── runner.ts               ← Shell-out executor (spawn + timeout + capture)
-│   ├── config.ts               ← TOML config loader + stack auto-detection
+│   ├── runner.ts               ← Shell-out executor (spawn + shell escape + timeout)
+│   ├── config.ts               ← TOML config loader, stack auto-detection, validation
 │   ├── pipeline.ts             ← Stage runner, pipeline orchestrator, topo-sort
 │   ├── git.ts                  ← Git operations (branch, diff, log, status)
 │   ├── secrets.ts              ← Secret scanning (regex patterns + Shannon entropy)
 │   ├── baseline.ts             ← Test baseline store, regression diffing
 │   ├── flaky.ts                ← Flaky test tracker (flip count → threshold)
-│   ├── hooks.ts                ← Pre-commit hook install/uninstall/signal
+│   ├── coverage.ts             ← Per-stack coverage collection, untested-code detection
+│   ├── hooks.ts                ← Pre-commit hook install/uninstall/signal protocol
 │   ├── agent.ts                ← Agent runner (Claude/Codex), SIGSTOP/SIGCONT/SIGKILL
+│   ├── autofix.ts              ← Fix prompt builder, auto-fix loop (agent → gate → retry)
+│   ├── linter-setup.ts         ← Per-stack linter config generation + dep installation
 │   ├── rollback.ts             ← Worktree-based revert simulation
 │   ├── release.ts              ← Tag analysis, semver bump, release execution
 │   ├── semver.ts               ← Version parsing, conventional commit detection, changelog
@@ -380,13 +471,15 @@ src/
 
 1. **Shell-out everywhere** — gait orchestrates existing tools (`go test`, `eslint`, `vitest`, `git`), never reimplements them. Works with any tool version.
 
-2. **Pipeline is the center** — the dashboard visualizes it, the commit hook runs it, agents trigger it after finishing, rollback simulates it in worktrees.
+2. **Pipeline is the center** — the dashboard visualizes it, the commit hook runs it, agents trigger it after finishing, rollback simulates it in worktrees, autofix loops around it.
 
 3. **Safe webview rendering** — the dashboard uses DOM builders (`document.createElement`), not `innerHTML`, to prevent XSS. All user content is inserted via `textContent`.
 
 4. **Config committed, state gitignored** — `.gait/config.toml` and `.gait/scripts/` are shared with the team. Baselines, history, and flaky data are local.
 
-5. **Pure TypeScript** — single language, single build (esbuild), no native dependencies, no binary to ship.
+5. **Non-destructive init** — re-running `gait init` on an existing project offers Re-initialize (with backup), Merge, or Cancel. Existing configs, scripts, and linter setups are never silently overwritten.
+
+6. **Pure TypeScript** — single language, single build (esbuild), no native dependencies, no binary to ship.
 
 ---
 
@@ -404,19 +497,19 @@ src/
 npm install
 npm run compile        # Build extension + webview
 npm run watch          # Rebuild on change
-npm run lint           # Type check (tsc --noEmit)
+npm run lint           # Type check (tsc --noEmit) + ESLint
 npm test               # Run all tests (vitest)
+npm run test:watch     # Watch mode
 npm run package        # Minified build for distribution
 ```
 
 ### Test
 
 ```bash
-npm test               # 110 tests across 14 files
-npm run test:watch     # Watch mode
+npm test               # 121 tests across 16 files
 ```
 
-Tests cover every core module: runner, config, pipeline, secrets, baseline, semver, history, hooks, flaky tracking, monorepo detection, script management, script detection, and AGENTS.md generation.
+Tests cover: runner, config, pipeline, secrets, baseline, semver, history, hooks, flaky tracking, monorepo detection, script management, script detection, AGENTS.md generation, autofix prompt builder, and linter setup.
 
 ### Debug
 
