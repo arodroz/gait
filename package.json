@@ -4,6 +4,10 @@
   "description": "Quality gate and pilot for AI coding agents",
   "version": "0.1.0",
   "publisher": "tuni",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arodroz/gait"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
