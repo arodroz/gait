@@ -1,9 +1,9 @@
 {
-  "name": "gait",
+  "name": "gait-quality-gate",
   "displayName": "gait — Guarded Agent Integration Tool",
   "description": "Quality gate and pilot for AI coding agents",
-  "version": "0.1.0",
-  "publisher": "tuni",
+  "version": "0.3.0",
+  "publisher": "arodroz",
   "repository": {
     "type": "git",
     "url": "https://github.com/arodroz/gait"
