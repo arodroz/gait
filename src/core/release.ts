@@ -22,14 +22,25 @@ export async function analyzeRelease(cwd: string): Promise<ReleaseInfo> {
     "git", ["log", `${currentTag}..HEAD`, "--pretty=format:%s"],
     cwd, 10_000,
   );
-  const commits = logResult.exitCode === 0
-    ? logResult.stdout.trim().split("\n").filter(Boolean)
-    : [];
+  let commits: string[] = [];
 
+  if (tagResult.exitCode !== 0) {
+    // No tags exist — use all commits as the first release
+    const recentCommits = await git.log(cwd, 50);
+    commits = recentCommits.map((c) => c.subject);
+  } else if (logResult.exitCode === 0) {
+    commits = logResult.stdout.trim().split("\n").filter(Boolean);
+  }
+
+  // Nothing to release if HEAD is already tagged
   if (commits.length === 0) {
-    // Fallback: get recent commits if no tags exist
-    const recentCommits = await git.log(cwd, 20);
-    commits.push(...recentCommits.map((c) => c.subject));
+    return {
+      currentVersion,
+      bumpType: "none",
+      nextVersion: currentVersion,
+      changelog: "",
+      commitCount: 0,
+    };
   }
 
   const bumpType = semver.detectBump(commits);
