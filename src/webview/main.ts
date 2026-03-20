@@ -63,25 +63,18 @@ interface DashboardState {
   commitGateOpen?: boolean;
 }
 
-const STAGE_ICONS: Record<string, string> = {
-  pending: "\u25CB",
-  running: "\u25CC",
-  passed: "\u2713",
-  failed: "\u2717",
-  skipped: "\u2013",
-};
+// --- Helpers ---
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
-
-// --- Safe DOM builders ---
 
 function el(tag: string, attrs?: Record<string, string>, ...children: (Node | string)[]): HTMLElement {
   const e = document.createElement(tag);
   if (attrs) {
     for (const [k, v] of Object.entries(attrs)) {
       if (k === "className") e.className = v;
+      else if (k === "style") e.setAttribute("style", v);
       else e.setAttribute(k, v);
     }
   }
@@ -92,12 +85,15 @@ function el(tag: string, attrs?: Record<string, string>, ...children: (Node | st
   return e;
 }
 
+// --- Builders ---
+
 function buildHeader(state: DashboardState): HTMLElement {
   const header = el("div", { className: "header" });
   header.appendChild(el("h1", {}, state.project));
-  header.appendChild(el("span", { className: "version" }, `v${state.version}`));
   header.appendChild(el("span", { className: `status-dot ${state.clean ? "clean" : "dirty"}` }));
-  header.appendChild(el("span", { className: "branch" }, state.branch));
+  if (state.branch) {
+    header.appendChild(el("span", { className: "branch" }, state.branch));
+  }
   header.appendChild(el("span", { className: "spacer" }));
   for (const s of state.stacks) {
     header.appendChild(el("span", { className: "stack-badge" }, s));
@@ -107,57 +103,157 @@ function buildHeader(state: DashboardState): HTMLElement {
 
 function buildGateBanner(state: DashboardState): HTMLElement | null {
   if (!state.lastGate) return null;
-  const cls = state.lastGate.passed ? "passed" : "failed";
-  const icon = state.lastGate.passed ? "\u2713" : "\u2717";
-  const label = state.lastGate.passed ? "GATE PASSED" : "GATE BLOCKED";
-  const dur = (state.lastGate.duration / 1000).toFixed(1);
-  return el("div", { className: `gate-banner ${cls}` }, `${icon} ${label} (${dur}s)`);
+  const passed = state.lastGate.passed;
+  const cls = passed ? "passed" : "failed";
+  const icon = el("span", { className: "gate-icon" }, passed ? "\u2713" : "\u2717");
+  const label = passed ? "Gate passed" : "Gate blocked";
+  const dur = el("span", { className: "gate-dur" }, `${(state.lastGate.duration / 1000).toFixed(1)}s`);
+  const banner = el("div", { className: `gate-banner ${cls}` });
+  banner.appendChild(icon);
+  banner.appendChild(el("span", {}, label));
+  banner.appendChild(el("span", { className: "spacer" }));
+  banner.appendChild(dur);
+  return banner;
 }
 
-function buildStages(stages: StageResult[]): HTMLElement {
-  const container = el("div", { className: "stages" });
-  for (const s of stages) {
-    const badge = el("div", { className: `stage-badge ${s.status}` });
-    badge.appendChild(el("span", { className: "icon" }, STAGE_ICONS[s.status] ?? "\u25CB"));
-    badge.appendChild(el("span", {}, capitalize(s.name)));
+function buildPipeline(stages: StageResult[]): HTMLElement {
+  const container = el("div", { className: "pipeline" });
+  for (let i = 0; i < stages.length; i++) {
+    const s = stages[i];
+
+    // Connector before (not for first)
+    if (i > 0) {
+      let connCls = "connector";
+      const prev = stages[i - 1];
+      if (prev.status === "passed") connCls += " done";
+      else if (prev.status === "failed") connCls += " fail";
+      container.appendChild(el("div", { className: connCls }));
+    }
+
+    const stage = el("div", { className: `stage ${s.status}` });
+
+    // Status icon
+    const icons: Record<string, string> = {
+      pending: "", running: "\u25AA", passed: "\u2713", failed: "\u2717", skipped: "\u2013",
+    };
+    stage.appendChild(el("span", { className: "icon" }, icons[s.status] ?? ""));
+    stage.appendChild(el("span", { className: "name" }, capitalize(s.name)));
     if (s.duration > 0) {
-      badge.appendChild(el("span", { className: "dur" }, `${(s.duration / 1000).toFixed(1)}s`));
+      stage.appendChild(el("span", { className: "dur" }, `${(s.duration / 1000).toFixed(1)}s`));
     }
 
+    // Fix button for failed stages
     if (s.status === "failed") {
-      // Fix button (click = scoped fix, shift+click = auto-fix loop)
-      const fixBtn = el("span", {
-        style: "margin-left: 6px; cursor: pointer; font-size: 0.8em; padding: 1px 6px; border: 1px solid var(--error); border-radius: 3px; color: var(--error);",
-        title: "Click to fix with agent. Shift+click for auto-fix loop.",
-      }, "Fix");
-      fixBtn.addEventListener("click", (e) => {
-        if ((e as MouseEvent).shiftKey) {
-          vscode.postMessage({ command: "autofixStage", data: s.name });
-        } else {
-          vscode.postMessage({ command: "fixStage", data: s.name });
-        }
+      const fix = el("button", { className: "fix-btn", title: "Click: fix with agent. Shift+click: auto-fix loop." }, "Fix");
+      fix.addEventListener("click", (e) => {
+        vscode.postMessage({ command: (e as MouseEvent).shiftKey ? "autofixStage" : "fixStage", data: s.name });
       });
-      badge.appendChild(fixBtn);
+      stage.appendChild(fix);
     } else {
-      badge.addEventListener("click", () => {
-        vscode.postMessage({ command: "runStage", data: s.name });
-      });
+      stage.addEventListener("click", () => vscode.postMessage({ command: "runStage", data: s.name }));
     }
 
-    container.appendChild(badge);
+    container.appendChild(stage);
   }
   return container;
 }
 
+function buildRegressions(state: DashboardState): HTMLElement | null {
+  if (!state.regressions?.length) return null;
+  const box = el("div", { className: "regressions" });
+  box.appendChild(el("div", { className: "reg-title" },
+    `${state.regressions.length} regression${state.regressions.length > 1 ? "s" : ""} detected`));
+  for (const name of state.regressions.slice(0, 8)) {
+    box.appendChild(el("div", { className: "reg-item" }, `\u2717 ${name}`));
+  }
+  if (state.regressions.length > 8) {
+    box.appendChild(el("div", { className: "reg-item", style: "opacity: 0.6;" },
+      `\u2026 and ${state.regressions.length - 8} more`));
+  }
+  if (state.flakyTests?.length) {
+    box.appendChild(el("div", { style: "color: var(--warn); font-size: 0.8em; margin-top: 6px;" },
+      `${state.flakyTests.length} flaky test${state.flakyTests.length > 1 ? "s" : ""} exempted`));
+  }
+  return box;
+}
+
+function buildAgentPanel(state: DashboardState): HTMLElement | null {
+  if (!state.agentRunning && !state.agentKind) return null;
+  const panel = el("div", { className: "agent-panel" });
+
+  const statusLine = el("div", { className: "agent-status-line" });
+  const dotCls = state.agentRunning ? (state.agentPaused ? "paused" : "running") : "done";
+  statusLine.appendChild(el("span", { className: `agent-dot ${dotCls}` }));
+  statusLine.appendChild(el("span", { className: "agent-kind" }, state.agentKind ?? ""));
+
+  const statusText = state.agentRunning ? (state.agentPaused ? "paused" : "running") : "done";
+  statusLine.appendChild(el("span", { className: "agent-meta" }, statusText));
+
+  if (state.agentElapsed) {
+    statusLine.appendChild(el("span", { className: "agent-meta" }, `${Math.round(state.agentElapsed / 1000)}s`));
+  }
+  if (state.agentTokens) {
+    statusLine.appendChild(el("span", { className: "agent-meta" }, `~${(state.agentTokens / 1000).toFixed(1)}k tok`));
+  }
+  panel.appendChild(statusLine);
+
+  // Context bar
+  if (state.agentRunning && state.agentContextPct !== undefined) {
+    const barWrap = el("div", { className: "context-bar" });
+    barWrap.appendChild(el("span", {}, `ctx ${state.agentContextPct}%`));
+    const track = el("div", { className: "context-track" });
+    const fill = el("div", { className: "context-fill", style: `width: ${state.agentContextPct}%;` });
+    track.appendChild(fill);
+    barWrap.appendChild(track);
+    panel.appendChild(barWrap);
+  }
+
+  if (state.agentPrompt) {
+    const prompt = state.agentPrompt.length > 80 ? state.agentPrompt.slice(0, 80) + "\u2026" : state.agentPrompt;
+    panel.appendChild(el("div", { className: "agent-prompt" }, `"${prompt}"`));
+  }
+
+  return panel;
+}
+
+function buildReview(state: DashboardState): HTMLElement | null {
+  if (!state.review) return null;
+  const r = state.review;
+  const panel = el("div", { className: "review-panel" });
+  panel.appendChild(el("div", { className: "section-header" },
+    el("span", { className: "chevron" }, "\u25BE"),
+    el("span", {}, "Post-task review"),
+  ));
+
+  const grid = el("div", { className: "review-grid" });
+  grid.appendChild(el("span", { className: "review-label" }, "Task"));
+  grid.appendChild(el("span", { className: "review-value" }, `"${r.taskDesc}"`));
+  grid.appendChild(el("span", { className: "review-label" }, "Agent"));
+  grid.appendChild(el("span", { className: "review-value" }, `${r.agentKind} \u00B7 ${(r.duration / 1000).toFixed(1)}s \u00B7 ${(r.tokens / 1000).toFixed(1)}k tokens`));
+  grid.appendChild(el("span", { className: "review-label" }, "Changes"));
+  grid.appendChild(el("span", { className: "review-value" }, `${r.filesChanged} file(s) +${r.additions} -${r.deletions}`));
+  grid.appendChild(el("span", { className: "review-label" }, "Gate"));
+  const gateVal = el("span", { className: "review-value", style: `color: var(--${r.gatePassed ? "success" : "error"});` },
+    r.gatePassed ? "\u2713 Passed" : "\u2717 Failed");
+  grid.appendChild(gateVal);
+
+  panel.appendChild(grid);
+  return panel;
+}
+
 function buildFiles(files: FileChange[]): HTMLElement | null {
   if (!files.length) return null;
-  const totalAdd = files.reduce((sum, f) => sum + f.additions, 0);
-  const totalDel = files.reduce((sum, f) => sum + f.deletions, 0);
+  const totalAdd = files.reduce((s, f) => s + f.additions, 0);
+  const totalDel = files.reduce((s, f) => s + f.deletions, 0);
 
   const section = el("div", { className: "section" });
-  section.appendChild(
-    el("div", { className: "section-title" }, `Changed Files \u2014 ${files.length} files +${totalAdd} -${totalDel}`),
-  );
+  const header = el("div", { className: "section-header" });
+  header.appendChild(el("span", { className: "chevron" }, "\u25BE"));
+  header.appendChild(el("span", {}, "Files"));
+  header.appendChild(el("span", { className: "count" }, `${files.length}`));
+  header.appendChild(el("span", { style: "color: var(--success); font-size: 1em;" }, `+${totalAdd}`));
+  header.appendChild(el("span", { style: "color: var(--error); font-size: 1em;" }, `-${totalDel}`));
+  section.appendChild(header);
 
   const list = el("div", { className: "file-list" });
   for (const f of files) {
@@ -173,16 +269,19 @@ function buildFiles(files: FileChange[]): HTMLElement | null {
 
 function buildLog(log: LogEntry[]): HTMLElement {
   const section = el("div", { className: "section" });
-  section.appendChild(el("div", { className: "section-title" }, "Log"));
+  const header = el("div", { className: "section-header" });
+  header.appendChild(el("span", { className: "chevron" }, "\u25BE"));
+  header.appendChild(el("span", {}, "Log"));
+  if (log.length) header.appendChild(el("span", { className: "count" }, `${log.length}`));
+  section.appendChild(header);
 
   const logDiv = el("div", { className: "log" });
   if (!log.length) {
-    logDiv.appendChild(el("span", { className: "log-empty" }, "No events yet \u2014 press a button to start"));
+    logDiv.appendChild(el("div", { className: "log-empty" }, "No events yet"));
   } else {
-    const visible = log.slice(-50).reverse();
-    for (const entry of visible) {
+    for (const entry of log.slice(-60).reverse()) {
       const row = el("div", { className: "log-entry" });
-      row.appendChild(el("span", { className: "log-time" }, entry.time));
+      row.appendChild(el("span", { className: "log-time" }, entry.time.split(":").slice(0, 3).join(":")));
       row.appendChild(el("span", { className: `log-msg ${entry.level}` }, entry.message));
       logDiv.appendChild(row);
     }
@@ -194,30 +293,29 @@ function buildLog(log: LogEntry[]): HTMLElement {
 function buildActions(state: DashboardState): HTMLElement {
   const bar = el("div", { className: "actions" });
 
-  const addBtn = (label: string, command: string, primary = false) => {
+  const addBtn = (label: string, command: string, primary = false, kbd?: string) => {
     const btn = el("button", { className: primary ? "btn" : "btn secondary" }, label);
+    if (kbd) btn.appendChild(el("span", { className: "kbd" }, kbd));
     if (state.pipelineRunning) btn.setAttribute("disabled", "true");
     btn.addEventListener("click", () => vscode.postMessage({ command }));
     bar.appendChild(btn);
   };
 
-  addBtn("\u229B Run Gate", "gate", true);
+  addBtn("Run Gate", "gate", true, "G");
+
   const stages = state.configuredStages ?? [];
-  if (stages.includes("lint")) addBtn("Lint", "lint");
-  if (stages.includes("test")) addBtn("Test", "test");
+  if (stages.includes("lint")) addBtn("Lint", "lint", false, "L");
+  if (stages.includes("test")) addBtn("Test", "test", false, "T");
   if (stages.includes("typecheck")) addBtn("Typecheck", "typecheck");
   if (stages.includes("build")) addBtn("Build", "build");
 
   // Agent controls
   if (state.agentRunning) {
-    if (state.agentPaused) {
-      addBtn("\u25B6 Resume", "resumeAgent");
-    } else {
-      addBtn("\u23F8 Pause", "pauseAgent");
-    }
+    if (state.agentPaused) addBtn("\u25B6 Resume", "resumeAgent");
+    else addBtn("\u23F8 Pause", "pauseAgent");
     addBtn("\u2717 Kill", "killAgent");
   } else {
-    addBtn("\u2699 Agent", "runAgent");
+    addBtn("Agent", "runAgent", false, "A");
   }
 
   addBtn("Rollback", "rollback");
@@ -225,142 +323,29 @@ function buildActions(state: DashboardState): HTMLElement {
   return bar;
 }
 
-function buildAgentPanel(state: DashboardState): HTMLElement | null {
-  if (!state.agentRunning && !state.agentKind) return null;
-
-  const section = el("div", { className: "section" });
-  section.appendChild(el("div", { className: "section-title" }, "Agent"));
-
-  if (state.agentRunning) {
-    const status = state.agentPaused ? "paused" : "running";
-    const indicator = el("div", { className: "agent-status" },
-      `\u25CF ${state.agentKind}  ${status}`);
-    indicator.style.color = state.agentPaused ? "var(--warn)" : "var(--success)";
-    indicator.style.fontWeight = "600";
-    section.appendChild(indicator);
-
-    // Token/context stats
-    if (state.agentTokens || state.agentContextPct) {
-      const pct = state.agentContextPct ?? 0;
-      const filled = Math.round(pct / 10);
-      const bar = "\u2588".repeat(filled) + "\u2591".repeat(10 - filled);
-      const elapsed = state.agentElapsed ? `${Math.round(state.agentElapsed / 1000)}s` : "";
-      const tokens = state.agentTokens ? `~${(state.agentTokens / 1000).toFixed(1)}k tokens` : "";
-      const statsLine = el("div", { style: "color: var(--muted); margin-top: 4px; font-family: var(--vscode-editor-font-family);" },
-        `  ctx: ${pct}% ${bar}  ${tokens}  ${elapsed}`);
-      section.appendChild(statsLine);
-    }
-
-    if (state.agentPrompt) {
-      const prompt = el("div", { style: "color: var(--muted); margin-top: 4px; font-style: italic;" },
-        `"${state.agentPrompt.length > 60 ? state.agentPrompt.slice(0, 60) + "..." : state.agentPrompt}"`);
-      section.appendChild(prompt);
-    }
-  } else if (state.agentKind) {
-    section.appendChild(el("div", { style: "color: var(--muted);" }, `\u25CB ${state.agentKind}  done`));
-  }
-
-  return section;
-}
-
-function buildRegressions(state: DashboardState): HTMLElement | null {
-  if (!state.regressions?.length) return null;
-  const section = el("div", { className: "section" });
-  section.appendChild(el("div", { className: "section-title", style: "color: var(--error);" },
-    `Regressions \u2014 ${state.regressions.length} test(s) now failing`));
-  for (const name of state.regressions) {
-    section.appendChild(el("div", { style: "color: var(--error); margin-left: 8px;" }, `\u2717 ${name}`));
-  }
-  if (state.flakyTests?.length) {
-    section.appendChild(el("div", { style: "color: var(--warn); margin-top: 8px;" },
-      `${state.flakyTests.length} flaky test(s) exempted`));
-  }
-  return section;
-}
-
-function buildReview(state: DashboardState): HTMLElement | null {
-  if (!state.review) return null;
-  const r = state.review;
-  const section = el("div", { className: "section" });
-  section.appendChild(el("div", { className: "section-title" }, "Post-Task Review"));
-
-  const dur = (r.duration / 1000).toFixed(1);
-  const tokens = r.tokens > 0 ? `${(r.tokens / 1000).toFixed(1)}k tokens` : "";
-  section.appendChild(el("div", {}, `Task: "${r.taskDesc}"`));
-  section.appendChild(el("div", { style: "color: var(--muted);" },
-    `Agent: ${r.agentKind}  Duration: ${dur}s  ${tokens}`));
-  section.appendChild(el("div", { style: "margin-top: 4px;" },
-    `Changes: ${r.filesChanged} file(s)  +${r.additions} -${r.deletions}`));
-
-  const gateEl = el("div", { style: `margin-top: 4px; font-weight: 600; color: var(--${r.gatePassed ? "success" : "error"});` },
-    `Gate: ${r.gatePassed ? "\u2713 PASSED" : "\u2717 FAILED"}`);
-  section.appendChild(gateEl);
-
-  return section;
-}
-
-function renderToDOM(container: HTMLElement, state: DashboardState): void {
-  while (container.firstChild) container.removeChild(container.firstChild);
-
-  container.appendChild(buildHeader(state));
-
-  const banner = buildGateBanner(state);
-  if (banner) container.appendChild(banner);
-
-  const regressions = buildRegressions(state);
-  if (regressions) container.appendChild(regressions);
-
-  if (state.stages.length) container.appendChild(buildStages(state.stages));
-
-  const agentPanel = buildAgentPanel(state);
-  if (agentPanel) container.appendChild(agentPanel);
-
-  const review = buildReview(state);
-  if (review) container.appendChild(review);
-
-  const files = buildFiles(state.files);
-  if (files) container.appendChild(files);
-
-  container.appendChild(buildLog(state.log));
-  container.appendChild(buildActions(state));
-
-  // Commit gate modal overlay
-  const modal = buildCommitGateModal(state);
-  if (modal) container.appendChild(modal);
-}
-
 function buildCommitGateModal(state: DashboardState): HTMLElement | null {
   if (!state.commitGateOpen || !state.lastGate) return null;
-
   const overlay = el("div", { className: "modal-overlay" });
   const modal = el("div", { className: "modal" });
   overlay.appendChild(modal);
+  modal.appendChild(el("h2", {}, "Commit Gate"));
 
-  modal.appendChild(el("h2", {}, "\u229B Commit Gate"));
-
-  // Stage results
   for (const s of state.stages) {
     const row = el("div", { className: "stage-row" });
-    const icons: Record<string, string> = { passed: "\u2713", failed: "\u2717", skipped: "\u2013", running: "\u25CC", pending: "\u25CB" };
-    const colors: Record<string, string> = { passed: "var(--success)", failed: "var(--error)", skipped: "var(--muted)", running: "var(--warn)", pending: "var(--muted)" };
-    const icon = el("span", { className: "icon" }, icons[s.status] ?? "\u25CB");
-    icon.style.color = colors[s.status] ?? "";
+    const colors: Record<string, string> = { passed: "var(--success)", failed: "var(--error)", running: "var(--warn)" };
+    const icons: Record<string, string> = { passed: "\u2713", failed: "\u2717", skipped: "\u2013", running: "\u25AA", pending: "" };
+    const icon = el("span", { className: "icon", style: `background: ${colors[s.status] ?? "var(--muted)"}; color: var(--bg);` }, icons[s.status] ?? "");
     row.appendChild(icon);
     row.appendChild(el("span", {}, capitalize(s.name)));
-    if (s.duration > 0) {
-      row.appendChild(el("span", { className: "dur" }, `${(s.duration / 1000).toFixed(1)}s`));
-    }
+    if (s.duration > 0) row.appendChild(el("span", { className: "dur" }, `${(s.duration / 1000).toFixed(1)}s`));
     modal.appendChild(row);
   }
 
-  // Result banner
   const passed = state.lastGate.passed;
   const dur = (state.lastGate.duration / 1000).toFixed(1);
-  const resultDiv = el("div", { className: `modal-result ${passed ? "passed" : "failed"}` },
-    `${passed ? "\u2713 PASSED" : "\u2717 BLOCKED"} (${dur}s)`);
-  modal.appendChild(resultDiv);
+  modal.appendChild(el("div", { className: `modal-result ${passed ? "passed" : "failed"}` },
+    `${passed ? "\u2713 Passed" : "\u2717 Blocked"} (${dur}s)`));
 
-  // Action buttons
   const actions = el("div", { className: "modal-actions" });
   if (passed) {
     const commitBtn = el("button", { className: "btn" }, "Commit");
@@ -372,13 +357,56 @@ function buildCommitGateModal(state: DashboardState): HTMLElement | null {
   actions.appendChild(cancelBtn);
   modal.appendChild(actions);
 
-  // Close on overlay click
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) vscode.postMessage({ command: "commitGateClose" });
   });
-
   return overlay;
 }
+
+// --- Render ---
+
+function renderToDOM(container: HTMLElement, state: DashboardState): void {
+  while (container.firstChild) container.removeChild(container.firstChild);
+
+  const dashboard = el("div", { className: "dashboard" });
+
+  dashboard.appendChild(buildHeader(state));
+
+  const banner = buildGateBanner(state);
+  if (banner) dashboard.appendChild(banner);
+
+  const regressions = buildRegressions(state);
+  if (regressions) dashboard.appendChild(regressions);
+
+  if (state.stages.length) dashboard.appendChild(buildPipeline(state.stages));
+
+  const agentPanel = buildAgentPanel(state);
+  if (agentPanel) dashboard.appendChild(agentPanel);
+
+  const review = buildReview(state);
+  if (review) dashboard.appendChild(review);
+
+  const files = buildFiles(state.files);
+  if (files) dashboard.appendChild(files);
+
+  dashboard.appendChild(buildLog(state.log));
+  dashboard.appendChild(buildActions(state));
+
+  container.appendChild(dashboard);
+
+  const modal = buildCommitGateModal(state);
+  if (modal) container.appendChild(modal);
+}
+
+// --- Keyboard shortcuts ---
+document.addEventListener("keydown", (e) => {
+  if (e.target !== document.body) return;
+  const key = e.key.toLowerCase();
+  if (key === "g") vscode.postMessage({ command: "gate" });
+  else if (key === "l") vscode.postMessage({ command: "lint" });
+  else if (key === "t") vscode.postMessage({ command: "test" });
+  else if (key === "a") vscode.postMessage({ command: "runAgent" });
+});
 
 // --- Message handler ---
 window.addEventListener("message", (event) => {
@@ -389,8 +417,7 @@ window.addEventListener("message", (event) => {
   }
 });
 
-// Initial loading state
 const appEl = document.getElementById("app");
 if (appEl) {
-  appEl.appendChild(el("div", { className: "log-empty", style: "padding: 40px; text-align: center;" }, "Loading..."));
+  appEl.appendChild(el("div", { className: "log-empty", style: "padding: 40px; text-align: center;" }, "Loading\u2026"));
 }
