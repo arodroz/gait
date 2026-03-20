@@ -193,13 +193,35 @@ export class InfoTreeProvider implements vscode.TreeDataProvider<InfoItem> {
 
   private items: InfoItem[] = [];
 
-  update(data: { branch: string; stacks: string[]; clean: boolean; project: string }): void {
+  update(data: {
+    branch: string;
+    stacks: string[];
+    clean: boolean;
+    project: string;
+    workspaces?: { name: string; path: string; kind: string; affected: boolean }[];
+  }): void {
     this.items = [
       new InfoItem("Project", data.project, "folder"),
       new InfoItem("Branch", data.branch, "git-branch"),
       new InfoItem("Status", data.clean ? "Clean" : "Dirty", data.clean ? "check" : "warning"),
       new InfoItem("Stacks", data.stacks.join(", ") || "none", "layers"),
     ];
+
+    if (data.workspaces && data.workspaces.length > 0) {
+      this.items.push(new InfoItem("Workspaces", `${data.workspaces.length}`, "folder-library"));
+      for (const ws of data.workspaces) {
+        const icon = ws.affected ? "circle-filled" : "circle-outline";
+        const color = ws.affected ? "testing.iconPassed" : undefined;
+        const item = new InfoItem(
+          `  ${ws.name}`,
+          ws.affected ? "affected" : ws.kind,
+          icon,
+        );
+        if (color) item.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
+        this.items.push(item);
+      }
+    }
+
     this._onDidChange.fire(undefined);
   }
 

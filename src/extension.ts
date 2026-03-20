@@ -204,10 +204,24 @@ async function updateDashboardInfo() {
   const clean = await git.isClean(cwd).catch(() => true);
   const stacks = config.detectStacks(cwd);
 
-  // Detect monorepo workspaces
+  // Detect monorepo workspaces + affected
   const workspaces = monorepo.detect(cwd);
+  let affectedWs: monorepo.Workspace[] = [];
+  let wsData: { name: string; path: string; kind: string; affected: boolean }[] = [];
+
   if (workspaces.length > 1) {
-    dashboard.addLog(`Monorepo: ${workspaces.length} workspaces (${workspaces.map((w) => w.name).join(", ")})`, "info");
+    const changedFiles = (await git.diffStat(cwd).catch(() => [])).map((s) => s.path);
+    affectedWs = monorepo.affected(workspaces, changedFiles);
+    wsData = workspaces.map((ws) => ({
+      name: ws.name,
+      path: ws.path,
+      kind: ws.kind,
+      affected: affectedWs.some((a) => a.path === ws.path),
+    }));
+    dashboard.addLog(
+      `Monorepo: ${workspaces.length} workspaces, ${affectedWs.length} affected`,
+      "info",
+    );
   }
 
   dashboard.updateState({
@@ -219,8 +233,7 @@ async function updateDashboardInfo() {
     configuredStages: getConfiguredStages(),
   });
 
-  // Update sidebar info tree
-  infoTree.update({ project: cfg.project.name, branch: branchName, stacks, clean });
+  infoTree.update({ project: cfg.project.name, branch: branchName, stacks, clean, workspaces: wsData });
 }
 
 async function refreshFiles() {
@@ -416,7 +429,32 @@ async function cmdGate(): Promise<boolean> {
     }
   } catch { /* no staged changes */ }
 
-  const result = await runPipeline(cfg, cwd, {
+  // Monorepo: scope tests to affected workspaces (unless triggered by commit hook = full suite)
+  let effectiveCfg = cfg;
+  const workspaces = monorepo.detect(cwd);
+  if (workspaces.length > 1 && !cfg.pipeline.autofix) {
+    const changedFiles = (await git.diffStat(cwd).catch(() => [])).map((s) => s.path);
+    const affectedWs = monorepo.affected(workspaces, changedFiles);
+
+    if (affectedWs.length > 0 && affectedWs.length < workspaces.length) {
+      // Build scoped config: replace test/lint commands with affected-only versions
+      effectiveCfg = JSON.parse(JSON.stringify(cfg)) as config.Config;
+      const scopedTest = affectedWs.map((ws) => monorepo.scopedTestCommand(ws, "")).filter(Boolean).join(" && ");
+      const scopedLint = affectedWs.map((ws) => monorepo.scopedLintCommand(ws, "")).filter(Boolean).join(" && ");
+
+      for (const stack of Object.values(effectiveCfg.stacks)) {
+        if (scopedTest && stack.Test) stack.Test = scopedTest;
+        if (scopedLint && stack.Lint) stack.Lint = scopedLint;
+      }
+
+      dashboard.addLog(
+        `Scoped to ${affectedWs.length} affected workspace(s): ${affectedWs.map((w) => w.name).join(", ")}`,
+        "info",
+      );
+    }
+  }
+
+  const result = await runPipeline(effectiveCfg, cwd, {
     onStageStart: (name) => {
       statusBar.setStageStatus(name, "running");
       pipelineTree.refresh([{ name, status: "running", output: "", error: "", duration: 0 }]);

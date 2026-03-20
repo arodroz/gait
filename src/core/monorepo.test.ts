@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { detect, affected, type Workspace } from "./monorepo";
+import { detect, affected, scopedTestCommand, scopedLintCommand, type Workspace } from "./monorepo";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "gait-mono-"));
@@ -67,5 +67,39 @@ describe("affected", () => {
 
   it("returns empty for unrelated changes", () => {
     expect(affected(workspaces, ["README.md"])).toEqual([]);
+  });
+});
+
+describe("scopedTestCommand", () => {
+  it("scopes go test to workspace path", () => {
+    const ws: Workspace = { name: "api", path: "api", kind: "go" };
+    expect(scopedTestCommand(ws, "go test ./...")).toBe("go test ./api/...");
+  });
+
+  it("scopes npm test to workspace", () => {
+    const ws: Workspace = { name: "frontend", path: "packages/frontend", kind: "npm" };
+    expect(scopedTestCommand(ws, "npm test")).toBe("npm run test --workspace=packages/frontend");
+  });
+
+  it("scopes pytest to workspace dir", () => {
+    const ws: Workspace = { name: "svc", path: "svc", kind: "python" };
+    expect(scopedTestCommand(ws, "pytest")).toBe("pytest svc");
+  });
+});
+
+describe("scopedLintCommand", () => {
+  it("scopes go vet to workspace", () => {
+    const ws: Workspace = { name: "api", path: "api", kind: "go" };
+    expect(scopedLintCommand(ws, "go vet ./...")).toBe("go vet ./api/...");
+  });
+
+  it("scopes eslint to workspace dir", () => {
+    const ws: Workspace = { name: "web", path: "packages/web", kind: "npm" };
+    expect(scopedLintCommand(ws, "npx eslint .")).toBe("npx eslint packages/web/");
+  });
+
+  it("scopes ruff to workspace", () => {
+    const ws: Workspace = { name: "svc", path: "svc", kind: "python" };
+    expect(scopedLintCommand(ws, "ruff check .")).toBe("ruff check svc");
   });
 });

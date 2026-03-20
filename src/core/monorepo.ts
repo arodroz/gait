@@ -24,6 +24,35 @@ export function affected(workspaces: Workspace[], changedFiles: string[]): Works
   );
 }
 
+/** Build a scoped test command that only tests affected workspaces */
+export function scopedTestCommand(ws: Workspace, baseCmd: string): string {
+  switch (ws.kind) {
+    case "go":
+      return `go test ./${ws.path}/...`;
+    case "npm":
+      // npm workspace filter
+      return `npm run test --workspace=${ws.path}`;
+    case "python":
+      return `pytest ${ws.path}`;
+    default:
+      return baseCmd;
+  }
+}
+
+/** Build a scoped lint command for a workspace */
+export function scopedLintCommand(ws: Workspace, baseCmd: string): string {
+  switch (ws.kind) {
+    case "go":
+      return `go vet ./${ws.path}/...`;
+    case "npm":
+      return `npx eslint ${ws.path}/`;
+    case "python":
+      return `ruff check ${ws.path}`;
+    default:
+      return baseCmd;
+  }
+}
+
 function detectGoWorkspaces(root: string): Workspace[] {
   const workFile = path.join(root, "go.work");
   if (!fs.existsSync(workFile)) return [];
