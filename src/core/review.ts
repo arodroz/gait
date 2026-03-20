@@ -71,7 +71,7 @@ If no issues found, respond with: []`;
 }
 
 /** Parse findings from agent output (tolerant JSON extraction) */
-function parseFindings(output: string): ReviewFinding[] {
+export function parseFindings(output: string): ReviewFinding[] {
   // Try to find JSON array in the output
   const jsonMatch = output.match(/\[[\s\S]*\]/);
   if (!jsonMatch) return [];

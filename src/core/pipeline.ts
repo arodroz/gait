@@ -2,7 +2,7 @@ import { run, type RunResult } from "./runner";
 import type { Config } from "./config";
 import { parseDuration } from "./util";
 
-export type StageName = "lint" | "typecheck" | "test" | "build";
+export type StageName = "lint" | "typecheck" | "test" | "build" | "review" | "audit" | string;
 export type StageStatus = "pending" | "running" | "passed" | "failed" | "skipped";
 
 export interface StageResult {

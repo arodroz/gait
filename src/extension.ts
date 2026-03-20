@@ -573,6 +573,59 @@ async function cmdGate(): Promise<boolean> {
     },
   });
 
+  // Run special stages if configured and pipeline passed so far
+  if (result.passed && cfg) {
+    const stages = cfg.pipeline.stages;
+
+    // Audit stage
+    if (stages.includes("audit")) {
+      dashboard.addLog("Running dependency audit...", "info");
+      const auditResult = await depAudit.audit(cwd, Object.keys(cfg.stacks));
+      const auditStage: import("./core/pipeline").StageResult = {
+        name: "audit", status: "passed", output: "", error: "", duration: auditResult.duration,
+      };
+      if (auditResult.findings.length > 0) {
+        const blockSev = (cfg.pipeline as any)?.audit?.block_severity ?? "high";
+        if (depAudit.shouldBlock(auditResult.findings, blockSev)) {
+          auditStage.status = "failed";
+          auditStage.error = depAudit.formatFindings(auditResult.findings);
+          result.passed = false;
+        }
+        dashboard.addLog(`Audit: ${auditResult.findings.length} finding(s)`, auditStage.status === "failed" ? "error" : "warn");
+      } else {
+        dashboard.addLog(`Audit passed (${(auditResult.duration / 1000).toFixed(1)}s)`, "success");
+      }
+      result.stages.push(auditStage);
+    }
+
+    // Review stage
+    if (stages.includes("review")) {
+      dashboard.addLog("Running AI code review...", "info");
+      const diff = await git.diff(cwd, true).catch(() => "") || await git.diff(cwd, false).catch(() => "");
+      if (diff) {
+        const changedFiles = (await git.diffStat(cwd).catch(() => [])).map((s) => s.path);
+        const reviewCfg = (cfg as any).review ?? {};
+        const reviewResult = await reviewDiff(cwd, config.gaitDir(cwd), diff, changedFiles, reviewCfg.agent ?? "claude",
+          (line) => dashboard.addLog(`[review] ${line}`, "info"));
+        const reviewStage: import("./core/pipeline").StageResult = {
+          name: "review", status: "passed", output: "", error: "", duration: reviewResult.duration,
+        };
+        if (reviewResult.findings.length > 0) {
+          const blockOn = reviewCfg.block_on ?? "error";
+          if (reviewShouldBlock(reviewResult.findings, blockOn)) {
+            reviewStage.status = "failed";
+            reviewStage.error = reviewResult.findings.map((f) => `[${f.severity}] ${f.file}:${f.line} ${f.message}`).join("\n");
+            result.passed = false;
+          }
+          dashboard.addLog(`Review: ${reviewResult.findings.length} finding(s)`, reviewStage.status === "failed" ? "error" : "warn");
+        } else {
+          dashboard.addLog(`Review passed (${(reviewResult.duration / 1000).toFixed(1)}s)`, "success");
+        }
+        result.stages.push(reviewStage);
+      }
+    }
+  }
+
   lastPipelineResult = result;
   statusBar.setGateStatus(result.passed, result.duration);
   pipelineTree.setGateResult(result.passed, result.duration);
@@ -1209,6 +1262,9 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
   } else {
     // Option C: scoped fix — full prompt with optional extra context
     let fullPrompt = buildFixPrompt(failedStage, cwd, stageCmd);
+    // Prepend agent memory
+    const memPrefix = memory.buildPromptPrefix(config.gaitDir(cwd));
+    if (memPrefix) fullPrompt = memPrefix + "\n\n---\n\n" + fullPrompt;
 
     // Enhance with blame context
     const blame = await blameError(cwd, failedStage.error + "\n" + failedStage.output);
@@ -1395,7 +1451,7 @@ async function cmdRunWorkflow() {
 
   dashboard.addLog(`Running workflow: ${picked.wf.name}`, "info");
   const progress = await workflow.runWorkflow(
-    picked.wf, cwd, { task: taskInput },
+    picked.wf, cwd, { task: taskInput, memory: memory.buildPromptPrefix(config.gaitDir(cwd)) },
     {
       onStepStart: (step, total, desc) => dashboard.addLog(`  Step ${step}/${total}: ${desc}`, "info"),
       onStepDone: (step, passed, _output) => dashboard.addLog(`  Step ${step}: ${passed ? "passed" : "FAILED"}`, passed ? "success" : "error"),
@@ -1553,8 +1609,15 @@ async function cmdGenerateTests() {
   let testCmd = "";
   for (const s of Object.values(cfg.stacks)) { if (s.Test) { testCmd = s.Test; break; } }
 
-  dashboard.addLog(`Generating tests for ${sourceFile}...`, "info");
-  const result = await generateTests(cwd, config.gaitDir(cwd), sourceFile, ["(all functions)"],
+  // Find actually uncovered functions via coverage
+  dashboard.addLog(`Analyzing coverage for ${sourceFile}...`, "info");
+  const covResult = await findUntested(cwd, [sourceFile], stack);
+  const uncoveredNames = covResult.uncovered.length > 0
+    ? covResult.uncovered.map((u) => u.name)
+    : ["(all exported functions)"]; // fallback if coverage unavailable
+
+  dashboard.addLog(`Generating tests for ${uncoveredNames.length} function(s) in ${sourceFile}...`, "info");
+  const result = await generateTests(cwd, config.gaitDir(cwd), sourceFile, uncoveredNames,
     testCmd, "claude", (line) => dashboard.addLog(`[testgen] ${line}`, "info"));
 
   if (result.passed) {
