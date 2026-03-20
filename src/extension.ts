@@ -19,6 +19,7 @@ import { HistoryLogger } from "./core/history";
 import { BaselineStore } from "./core/baseline";
 import { FlakyTracker } from "./core/flaky";
 import { findUntested } from "./core/coverage";
+import { parseTestOutput } from "./core/test-parser";
 import { AgentRunner } from "./core/agent";
 import { buildFixPrompt, runAutofixLoop } from "./core/autofix";
 import { StatusBarManager } from "./views/statusbar";
@@ -475,22 +476,49 @@ async function cmdGate(): Promise<boolean> {
     const gaitDirPath = config.gaitDir(cwd);
     const baselineStore = new BaselineStore(gaitDirPath);
     const flakyTracker = new FlakyTracker(gaitDirPath);
+    const stack = cfg ? Object.keys(cfg.stacks)[0] ?? "" : "";
 
-    // Parse test stage output for test names (basic: count pass/fail lines)
     const testStage = result.stages.find((s) => s.name === "test");
     if (testStage && testStage.status !== "skipped") {
-      // Update flaky tracker and check regressions
-      const report = baselineStore.diff([], branchName); // empty until we have a test parser
-      const flakyList = flakyTracker.flakyTests();
-      const regressions = report.regressions
-        .map((r) => `${r.package}/${r.name}`)
-        .filter((name) => !flakyTracker.isFlaky(name));
+      // Parse test output into structured results
+      const testOutput = testStage.output + "\n" + testStage.error;
+      const currentResults = parseTestOutput(testOutput, stack);
 
-      if (regressions.length > 0) {
-        dashboard.addLog(`${regressions.length} regression(s) detected`, "error");
-        dashboard.updateState({ regressions, flakyTests: flakyList });
-      } else {
-        dashboard.updateState({ regressions: [], flakyTests: flakyList });
+      if (currentResults.length > 0) {
+        // Diff against baseline
+        const report = baselineStore.diff(currentResults, branchName);
+
+        // Update flaky tracker
+        for (const t of currentResults) {
+          const key = `${t.package}/${t.name}`;
+          flakyTracker.update(key, t.passed);
+        }
+        flakyTracker.save();
+
+        const flakyList = flakyTracker.flakyTests();
+        const regressions = report.regressions
+          .map((r) => `${r.package}/${r.name}`)
+          .filter((name) => !flakyTracker.isFlaky(name));
+
+        if (regressions.length > 0) {
+          dashboard.addLog(`${regressions.length} regression(s) detected`, "error");
+          for (const r of regressions.slice(0, 5)) {
+            dashboard.addLog(`  REGRESSION: ${r}`, "error");
+          }
+          dashboard.updateState({ regressions, flakyTests: flakyList });
+        } else {
+          dashboard.updateState({ regressions: [], flakyTests: flakyList });
+        }
+
+        if (report.newTests.length > 0) {
+          dashboard.addLog(`${report.newTests.length} new test(s) detected`, "info");
+        }
+
+        // Save current results as new baseline (only if tests passed)
+        if (testStage.status === "passed") {
+          baselineStore.save({ branch: branchName, tests: currentResults, updatedAt: "" });
+          dashboard.addLog(`Baseline saved: ${currentResults.length} test(s) on ${branchName}`, "info");
+        }
       }
     }
   } catch { /* baseline check is best-effort */ }
