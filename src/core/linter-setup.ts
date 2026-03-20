@@ -37,24 +37,13 @@ export async function ensureLinterSetup(cwd: string, stacks: Stack[]): Promise<S
 }
 
 async function setupTypeScript(cwd: string, result: SetupResult): Promise<void> {
-  // ESLint config
-  const configFile = path.join(cwd, "eslint.config.js");
-  if (fs.existsSync(configFile)) {
-    const content = fs.readFileSync(configFile, "utf-8");
-    if (content.trim().length > 30) {
-      result.skipped.push("eslint.config.js (already configured)");
-    } else {
-      // Empty/stub config — replace it
-      writeEslintConfig(configFile);
-      result.created.push("eslint.config.js");
-    }
-  } else if (!fs.existsSync(path.join(cwd, ".eslintrc.json")) &&
-             !fs.existsSync(path.join(cwd, ".eslintrc.js")) &&
-             !fs.existsSync(path.join(cwd, ".eslintrc"))) {
+  // ESLint config — skip if any eslint config already exists and is non-trivial
+  if (hasExistingEslintConfig(cwd)) {
+    result.skipped.push("eslint (existing config found)");
+  } else {
+    const configFile = path.join(cwd, "eslint.config.js");
     writeEslintConfig(configFile);
     result.created.push("eslint.config.js");
-  } else {
-    result.skipped.push("eslint (existing config found)");
   }
 
   // Install deps if missing
@@ -74,6 +63,21 @@ async function setupTypeScript(cwd: string, result: SetupResult): Promise<void> 
       }
     }
   }
+}
+
+function hasExistingEslintConfig(cwd: string): boolean {
+  const names = [
+    ".eslintrc", ".eslintrc.json", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yml",
+    "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs",
+  ];
+  for (const n of names) {
+    const p = path.join(cwd, n);
+    if (!fs.existsSync(p)) continue;
+    // Treat empty/stub files as "no config"
+    const content = fs.readFileSync(p, "utf-8").trim();
+    if (content.length > 30) return true;
+  }
+  return false;
 }
 
 function writeEslintConfig(configPath: string): void {

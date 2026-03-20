@@ -29,7 +29,7 @@ describe("ensureLinterSetup", () => {
     fs.writeFileSync(path.join(dir, "eslint.config.js"), "module.exports = [{ rules: { semi: 'error' } }];");
 
     const result = await ensureLinterSetup(dir, ["typescript"]);
-    expect(result.skipped.some((s) => s.includes("already configured"))).toBe(true);
+    expect(result.skipped.some((s) => s.includes("existing config"))).toBe(true);
   });
 
   it("creates golangci config for go stack", async () => {
