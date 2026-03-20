@@ -23,6 +23,15 @@ import { findUntested } from "./core/coverage";
 import { parseTestOutput } from "./core/test-parser";
 import { AgentRunner } from "./core/agent";
 import { buildFixPrompt, runAutofixLoop } from "./core/autofix";
+import * as snapshot from "./core/snapshot";
+import { getProfile, listProfiles, applyProfile } from "./core/profiles";
+import * as prompts from "./core/prompts";
+import { blameError, enhancePromptWithBlame } from "./core/blame";
+import { getCurrentDiffs } from "./core/diff-watcher";
+import { CostTracker } from "./core/cost-tracker";
+import * as prGenerator from "./core/pr-generator";
+import * as workflow from "./core/workflow";
+import { notify, type NotifyConfig, type NotifyPayload } from "./core/notify";
 import { StatusBarManager } from "./views/statusbar";
 import { PipelineTreeProvider, ActionsTreeProvider, InfoTreeProvider, ScriptsTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
@@ -32,6 +41,9 @@ let pipelineTree: PipelineTreeProvider;
 let actionsTree: ActionsTreeProvider;
 let infoTree: InfoTreeProvider;
 let scriptsTree: ScriptsTreeProvider;
+let costTracker: CostTracker;
+let currentProfile = "default";
+let diffPollInterval: NodeJS.Timeout | undefined;
 let dashboard: DashboardPanel;
 let cfg: config.Config | undefined;
 let cwd: string;
@@ -60,6 +72,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerTreeDataProvider("gait.info", infoTree),
   );
 
+  costTracker = new CostTracker(config.gaitDir(cwd));
   if (config.configExists(cwd)) loadConfig();
 
   // Register all commands
@@ -81,6 +94,12 @@ export function activate(context: vscode.ExtensionContext) {
     "gait.runScript": cmdRunScript,
     "gait.listScripts": cmdListScripts,
     "gait.detectScripts": cmdDetectScripts,
+    "gait.snapshot": cmdSnapshot,
+    "gait.restoreSnapshot": cmdRestoreSnapshot,
+    "gait.switchProfile": cmdSwitchProfile,
+    "gait.createPR": cmdCreatePR,
+    "gait.runWorkflow": cmdRunWorkflow,
+    "gait.costSummary": cmdCostSummary,
   };
   for (const [id, handler] of Object.entries(commands)) {
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
@@ -171,7 +190,6 @@ export function activate(context: vscode.ExtensionContext) {
   // Agent event wiring
   agent.on("output", (line: string) => {
     dashboard.addLog(`[agent] ${line}`, "info");
-    // Push live stats to dashboard
     dashboard.updateState({
       agentTokens: agent.estimateTokens(),
       agentContextPct: agent.estimateContextPct(),
@@ -179,12 +197,18 @@ export function activate(context: vscode.ExtensionContext) {
     });
   });
   agent.on("done", async (_code: number, duration: number) => {
+    // Stop diff polling
+    if (diffPollInterval) { clearInterval(diffPollInterval); diffPollInterval = undefined; }
+
     const dur = (duration / 1000).toFixed(1);
     const tokens = agent.estimateTokens();
     const taskDesc = agent.currentSession?.prompt ?? "";
     const agentKind = agent.currentSession?.kind ?? "";
     dashboard.addLog(`Agent finished (${dur}s, ~${(tokens / 1000).toFixed(1)}k tokens)`, "success");
     dashboard.updateState({ agentRunning: false, agentPaused: false, agentTokens: tokens });
+
+    // Track cost
+    costTracker.estimateFromLines(agentKind, taskDesc, agent.currentSession?.lines ?? 0, duration);
 
     // Auto-pipeline after agent
     const gatePassed = await cmdGate();
@@ -195,20 +219,21 @@ export function activate(context: vscode.ExtensionContext) {
     const totalDel = stats.reduce((s, f) => s + f.deletions, 0);
     dashboard.updateState({
       review: {
-        taskDesc,
-        agentKind,
-        duration,
-        tokens,
-        filesChanged: stats.length,
-        additions: totalAdd,
-        deletions: totalDel,
+        taskDesc, agentKind, duration, tokens,
+        filesChanged: stats.length, additions: totalAdd, deletions: totalDel,
         gatePassed: gatePassed !== false,
       },
     });
 
     logHistory("agent_session", { kind: agentKind, prompt: taskDesc, duration, tokens });
+
+    // Notifications
+    sendNotify(gatePassed ? "gate.passed" : "gate.failed",
+      `Agent ${agentKind} finished — gate ${gatePassed ? "passed" : "failed"}`,
+      { duration: dur, tokens, files: stats.length });
   });
   agent.on("error", (err: string) => {
+    if (diffPollInterval) { clearInterval(diffPollInterval); diffPollInterval = undefined; }
     dashboard.addLog(`Agent error: ${err}`, "error");
     dashboard.updateState({ agentRunning: false, agentPaused: false });
   });
@@ -382,7 +407,11 @@ async function doFullInit(stacks: config.Stack[], projectName: string) {
     if (cmds.Build) write(`${stack}_build.sh`, scripts.generateScript("build", `Build ${stack} project`, cmds.Build));
   }
 
-  // Linter setup — ask before installing deps
+  // Create default prompts and workflows
+  prompts.createDefaults(config.gaitDir(cwd));
+  workflow.createDefaults(config.gaitDir(cwd));
+
+  // Linter setup
   const linterResult = await ensureLinterSetup(cwd, stacks);
   const msgs: string[] = [];
   if (linterResult.created.length) msgs.push(`Linter configs: ${linterResult.created.join(", ")}`);
@@ -466,8 +495,14 @@ async function cmdGate(): Promise<boolean> {
     }
   } catch { /* no staged changes */ }
 
-  // Monorepo: scope tests to affected workspaces (unless triggered by commit hook = full suite)
-  let effectiveCfg = cfg;
+  // Apply pipeline profile
+  const profile = getProfile(cfg, currentProfile);
+  let effectiveCfg = applyProfile(cfg, profile);
+  if (currentProfile !== "default" && currentProfile !== "full") {
+    dashboard.addLog(`Profile: ${currentProfile} (${profile.stages.join(" → ")})`, "info");
+  }
+
+  // Monorepo: scope tests to affected workspaces
   const workspaces = monorepo.detect(cwd);
   if (workspaces.length > 1 && !cfg.pipeline.autofix) {
     const changedFiles = (await git.diffStat(cwd).catch(() => [])).map((s) => s.path);
@@ -517,11 +552,13 @@ async function cmdGate(): Promise<boolean> {
   if (result.passed) {
     dashboard.addLog(`Pipeline PASSED (${dur}s)`, "success");
     vscode.window.showInformationMessage(`Gait: Pipeline passed (${dur}s)`);
+    sendNotify("gate.passed", `Pipeline passed (${dur}s)`, { stages: result.stages.length });
   } else {
     const failedStages = result.stages.filter((s) => s.status === "failed");
     const failed = failedStages.map((s) => s.name);
     dashboard.addLog(`Pipeline FAILED [${failed.join(", ")}] (${dur}s)`, "error");
     vscode.window.showErrorMessage(`Gait: Pipeline failed — ${failed.join(", ")}`);
+    sendNotify("gate.failed", `Pipeline failed: ${failed.join(", ")} (${dur}s)`, { failed });
 
     // Option D: auto-fix when config says so
     if (cfg?.pipeline.autofix && failedStages.length > 0) {
@@ -715,15 +752,63 @@ async function cmdRunAgent() {
   const kind = await vscode.window.showQuickPick(available, { placeHolder: "Select agent" });
   if (!kind) return;
 
-  const prompt = await vscode.window.showInputBox({ prompt: "Enter prompt for the agent", placeHolder: "Fix the failing test..." });
+  // Check for prompt templates
+  const templates = prompts.listTemplates(config.gaitDir(cwd));
+  let prompt: string | undefined;
+
+  if (templates.length > 0) {
+    const choice = await vscode.window.showQuickPick(
+      [{ label: "Custom prompt", description: "Type your own" },
+       ...templates.map((t) => ({ label: t.name, description: t.description }))],
+      { placeHolder: "Select a prompt template or type custom" },
+    );
+    if (!choice) return;
+
+    if (choice.label === "Custom prompt") {
+      prompt = await vscode.window.showInputBox({ prompt: "Enter prompt", placeHolder: "Fix the failing test..." });
+    } else {
+      const tmpl = templates.find((t) => t.name === choice.label)!;
+      const vars: Record<string, string> = {};
+      for (const v of tmpl.variables) {
+        const val = await vscode.window.showInputBox({ prompt: `Value for {{${v}}}` });
+        if (val === undefined) return;
+        vars[v] = val;
+      }
+      prompt = prompts.interpolate(tmpl.body, vars);
+    }
+  } else {
+    prompt = await vscode.window.showInputBox({ prompt: "Enter prompt", placeHolder: "Fix the failing test..." });
+  }
   if (!prompt) return;
 
+  // Budget check
+  const budget = (cfg?.pipeline as any)?.daily_budget_usd ?? 0;
+  if (budget > 0 && !costTracker.canRun(budget)) {
+    vscode.window.showWarningMessage(`Daily budget ($${budget}) exceeded. Agent blocked.`);
+    return;
+  }
+
+  // Snapshot before agent
+  const snap = await snapshot.take(cwd, config.gaitDir(cwd));
+  dashboard.addLog(`Snapshot: ${snap.id}`, "info");
+
   dashboard.addLog(`Starting ${kind} agent...`, "info");
-  dashboard.updateState({ agentRunning: true, agentKind: kind, agentPrompt: prompt, agentPaused: false });
+  dashboard.updateState({ agentRunning: true, agentKind: kind, agentPrompt: prompt.slice(0, 80), agentPaused: false });
+
+  // Start diff polling
+  diffPollInterval = setInterval(async () => {
+    const diffs = await getCurrentDiffs(cwd);
+    if (diffs.length > 0) {
+      dashboard.updateState({
+        files: diffs.map((d) => ({ path: d.file, additions: 0, deletions: 0, status: "modified" })),
+      });
+    }
+  }, 2000);
 
   try {
     await agent.start(kind as any, prompt, cwd);
   } catch (err) {
+    if (diffPollInterval) { clearInterval(diffPollInterval); diffPollInterval = undefined; }
     dashboard.addLog(`Failed to start agent: ${err}`, "error");
     dashboard.updateState({ agentRunning: false });
   }
@@ -1064,7 +1149,14 @@ async function cmdFixStage(stageName: string, autoLoop: boolean) {
     }
   } else {
     // Option C: scoped fix — full prompt with optional extra context
-    const fullPrompt = buildFixPrompt(failedStage, cwd, stageCmd);
+    let fullPrompt = buildFixPrompt(failedStage, cwd, stageCmd);
+
+    // Enhance with blame context
+    const blame = await blameError(cwd, failedStage.error + "\n" + failedStage.output);
+    if (blame) {
+      fullPrompt = enhancePromptWithBlame(fullPrompt, blame);
+      dashboard.addLog(`Blame: ${blame.commitHash.slice(0, 8)} by ${blame.author} (${blame.date})`, "info");
+    }
 
     const extraContext = await vscode.window.showInputBox({
       prompt: "Add extra context for the agent (optional, press Enter to send as-is)",
@@ -1116,8 +1208,201 @@ function getStageCommand(name: StageName): string {
   return "";
 }
 
+// --- Feature 1: Snapshot ---
+
+async function cmdSnapshot() {
+  const snap = await snapshot.take(cwd, config.gaitDir(cwd));
+  dashboard.addLog(`Snapshot taken: ${snap.id}`, "success");
+  vscode.window.showInformationMessage(`Snapshot: ${snap.id}`);
+}
+
+async function cmdRestoreSnapshot() {
+  const snaps = snapshot.list(config.gaitDir(cwd));
+  if (!snaps.length) { vscode.window.showInformationMessage("No snapshots available."); return; }
+
+  const items = snaps.reverse().map((s) => ({
+    label: s.id,
+    description: `${s.branch} @ ${s.commitHash.slice(0, 8)}`,
+    detail: new Date(s.timestamp).toLocaleString(),
+    snap: s,
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: "Select snapshot to restore" });
+  if (!picked) return;
+
+  const confirm = await vscode.window.showWarningMessage(
+    `Restore to ${picked.label}? This will discard current changes.`, "Restore", "Cancel",
+  );
+  if (confirm !== "Restore") return;
+
+  const result = await snapshot.restore(cwd, config.gaitDir(cwd), picked.snap.id);
+  if (result.success) {
+    dashboard.addLog(`Restored to ${picked.snap.id}`, "success");
+    vscode.window.showInformationMessage("Snapshot restored.");
+  } else {
+    vscode.window.showErrorMessage(`Restore failed: ${result.error}`);
+  }
+}
+
+// --- Feature 2: Pipeline Profiles ---
+
+async function cmdSwitchProfile() {
+  if (!cfg) return;
+  const profiles = listProfiles(cfg);
+  const picked = await vscode.window.showQuickPick(
+    profiles.map((p) => {
+      const profile = getProfile(cfg!, p);
+      return { label: p, description: profile.stages.join(" → ") };
+    }),
+    { placeHolder: `Current: ${currentProfile}` },
+  );
+  if (!picked) return;
+  currentProfile = picked.label;
+  dashboard.addLog(`Switched to profile: ${currentProfile}`, "info");
+  vscode.window.showInformationMessage(`Pipeline profile: ${currentProfile}`);
+}
+
+// --- Feature 8: PR Generator ---
+
+async function cmdCreatePR() {
+  const branchName = await git.branch(cwd);
+  if (branchName === "main" || branchName === "master") {
+    vscode.window.showWarningMessage("Create a branch first — can't PR from main.");
+    return;
+  }
+
+  dashboard.addLog("Generating PR summary...", "info");
+  const summary = await prGenerator.generate(cwd);
+
+  if (summary.commits === 0) {
+    vscode.window.showInformationMessage("No commits to create a PR from.");
+    return;
+  }
+
+  const ch = getOutputChannel("Gait: PR");
+  ch.clear();
+  ch.appendLine(`Title: ${summary.title}`);
+  ch.appendLine(`Branch: ${summary.branch} → ${summary.baseBranch}`);
+  ch.appendLine(`Commits: ${summary.commits} | Files: ${summary.filesChanged} | +${summary.additions} -${summary.deletions}`);
+  ch.appendLine("");
+  ch.appendLine(summary.body);
+  ch.show(true);
+
+  const action = await vscode.window.showInformationMessage(
+    `Create PR "${summary.title}"? (${summary.commits} commits, ${summary.filesChanged} files)`,
+    "Create PR", "Edit Title", "Cancel",
+  );
+
+  if (action === "Cancel" || !action) return;
+
+  let title = summary.title;
+  if (action === "Edit Title") {
+    const edited = await vscode.window.showInputBox({ value: title, prompt: "PR title" });
+    if (!edited) return;
+    title = edited;
+  }
+
+  const result = await prGenerator.createPR(cwd, title, summary.body, summary.baseBranch);
+  if (result.success) {
+    dashboard.addLog(`PR created: ${result.url}`, "success");
+    vscode.window.showInformationMessage(`PR created: ${result.url}`);
+    sendNotify("release.tagged", `PR created: ${title}`, { url: result.url, commits: summary.commits });
+  } else {
+    vscode.window.showErrorMessage(`PR failed: ${result.error}`);
+  }
+}
+
+// --- Feature 9: Workflows ---
+
+async function cmdRunWorkflow() {
+  const workflows = workflow.listWorkflows(config.gaitDir(cwd));
+  if (!workflows.length) {
+    vscode.window.showInformationMessage("No workflows in .gait/workflows/. Run 'Gait: Initialize' to create defaults.");
+    return;
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    workflows.map((w) => ({ label: w.name, description: w.description, detail: `${w.steps.length} steps`, wf: w })),
+    { placeHolder: "Select workflow" },
+  );
+  if (!picked) return;
+
+  const taskInput = await vscode.window.showInputBox({ prompt: "Task description (used as {{task}} variable)", placeHolder: "Add user authentication" });
+  if (taskInput === undefined) return;
+
+  // Take snapshot before workflow
+  const snap = await snapshot.take(cwd, config.gaitDir(cwd));
+  dashboard.addLog(`Snapshot before workflow: ${snap.id}`, "info");
+
+  dashboard.addLog(`Running workflow: ${picked.wf.name}`, "info");
+  const progress = await workflow.runWorkflow(
+    picked.wf, cwd, { task: taskInput },
+    {
+      onStepStart: (step, total, desc) => dashboard.addLog(`  Step ${step}/${total}: ${desc}`, "info"),
+      onStepDone: (step, passed, _output) => dashboard.addLog(`  Step ${step}: ${passed ? "passed" : "FAILED"}`, passed ? "success" : "error"),
+      onAgentOutput: (line) => dashboard.addLog(`  [wf] ${line}`, "info"),
+      runGate: (profile) => {
+        if (profile) currentProfile = profile;
+        return cmdGate();
+      },
+    },
+  );
+
+  if (progress.status === "passed") {
+    dashboard.addLog(`Workflow "${picked.wf.name}" completed`, "success");
+    vscode.window.showInformationMessage(`Workflow "${picked.wf.name}" completed successfully.`);
+  } else {
+    dashboard.addLog(`Workflow "${picked.wf.name}" failed at step ${progress.currentStep}`, "error");
+    const action = await vscode.window.showWarningMessage(
+      `Workflow failed. Restore snapshot?`, "Restore", "Keep Changes",
+    );
+    if (action === "Restore") {
+      await snapshot.restore(cwd, config.gaitDir(cwd), snap.id);
+      dashboard.addLog("Restored to pre-workflow snapshot", "info");
+    }
+  }
+}
+
+// --- Feature 7: Cost Summary ---
+
+async function cmdCostSummary() {
+  const budget = (cfg?.pipeline as any)?.daily_budget_usd ?? 0;
+  const summary = costTracker.summary(budget);
+
+  const ch = getOutputChannel("Gait: Costs");
+  ch.clear();
+  ch.appendLine(`Agent Cost Summary`);
+  ch.appendLine(`──────────────────`);
+  ch.appendLine(`Today:      $${summary.today.toFixed(2)}${budget > 0 ? ` / $${budget.toFixed(2)} (${summary.budgetUsedPct}%)` : ""}`);
+  ch.appendLine(`This week:  $${summary.thisWeek.toFixed(2)}`);
+  ch.appendLine(`This month: $${summary.thisMonth.toFixed(2)}`);
+  ch.appendLine(`Sessions:   ${summary.sessions}`);
+  if (summary.overBudget) ch.appendLine(`\n⚠ OVER DAILY BUDGET`);
+  ch.show(true);
+}
+
+// --- Notifications helper ---
+
+function sendNotify(event: import("./core/notify").NotifyEvent, message: string, details?: Record<string, unknown>) {
+  if (!cfg) return;
+  const notifyCfg = (cfg as any).notifications as NotifyConfig | undefined;
+  if (!notifyCfg) return;
+  const payload: NotifyPayload = {
+    event,
+    project: cfg.project.name,
+    branch: "",
+    message,
+    details,
+  };
+  git.branch(cwd).then((b) => { payload.branch = b; }).catch(() => {}).finally(() => {
+    notify(notifyCfg, payload).catch(() => {});
+  });
+}
+
 function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-export function deactivate() {}
+export function deactivate() {
+  if (diffPollInterval) clearInterval(diffPollInterval);
+}

@@ -85,7 +85,13 @@
       {
         "command": "gait.detectScripts",
         "title": "Gait: Detect Script Patterns"
-      }
+      },
+      { "command": "gait.snapshot", "title": "Gait: Take Snapshot" },
+      { "command": "gait.restoreSnapshot", "title": "Gait: Restore Snapshot" },
+      { "command": "gait.switchProfile", "title": "Gait: Switch Pipeline Profile" },
+      { "command": "gait.createPR", "title": "Gait: Create Pull Request" },
+      { "command": "gait.runWorkflow", "title": "Gait: Run Workflow" },
+      { "command": "gait.costSummary", "title": "Gait: Cost Summary" }
     ],
     "viewsContainers": {
       "activitybar": [
