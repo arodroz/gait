@@ -17,6 +17,7 @@ import { runPipeline, runStage, type StageName } from "./core/pipeline";
 import { HistoryLogger } from "./core/history";
 import { BaselineStore } from "./core/baseline";
 import { FlakyTracker } from "./core/flaky";
+import { findUntested } from "./core/coverage";
 import { AgentRunner } from "./core/agent";
 import { StatusBarManager } from "./views/statusbar";
 import { PipelineTreeProvider } from "./views/sidebar";
@@ -86,6 +87,13 @@ export function activate(context: vscode.ExtensionContext) {
       case "killAgent": agent.kill(); dashboard.addLog("Agent killed", "error"); break;
       case "rollback": await cmdRollback(); break;
       case "release": await cmdRelease(); break;
+      case "commitGateApprove":
+        dashboard.updateState({ commitGateOpen: false });
+        dashboard.addLog("Commit approved via gate modal", "success");
+        break;
+      case "commitGateClose":
+        dashboard.updateState({ commitGateOpen: false });
+        break;
     }
   });
 
@@ -100,7 +108,11 @@ export function activate(context: vscode.ExtensionContext) {
   if (config.configExists(cwd)) {
     const hookInterval = setInterval(() => {
       if (hooks.checkHookTrigger(config.gaitDir(cwd))) {
+        // Open dashboard with commit gate modal
+        dashboard.open();
+        dashboard.updateState({ commitGateOpen: true });
         cmdGate().then((passed) => {
+          dashboard.updateState({ commitGateOpen: true }); // keep modal open with results
           hooks.writeHookResult(config.gaitDir(cwd), passed !== false);
         });
       }
@@ -334,6 +346,22 @@ async function cmdGate(): Promise<boolean> {
       }
     }
   } catch { /* baseline check is best-effort */ }
+
+  // Untested new code detection
+  try {
+    const stagedFiles = await git.stagedFiles(cwd).catch(() => [] as string[]);
+    const changedFiles = stagedFiles.length > 0 ? stagedFiles : (await git.diffStat(cwd)).map((s) => s.path);
+    if (changedFiles.length > 0 && cfg) {
+      const stack = Object.keys(cfg.stacks)[0] ?? "";
+      const untested = await findUntested(cwd, changedFiles, stack);
+      if (untested.length > 0) {
+        dashboard.addLog(`${untested.length} new function(s) without test coverage`, "warn");
+        const names = untested.slice(0, 5).map((u) => `${u.file}:${u.name}`);
+        for (const n of names) dashboard.addLog(`  untested: ${n}`, "warn");
+        if (untested.length > 5) dashboard.addLog(`  ...and ${untested.length - 5} more`, "warn");
+      }
+    }
+  } catch { /* coverage check is best-effort */ }
 
   return result.passed;
 }

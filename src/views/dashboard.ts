@@ -33,9 +33,10 @@ export interface DashboardState {
     deletions: number;
     gatePassed: boolean;
   };
-  // Regressions from baseline
   regressions?: string[];
   flakyTests?: string[];
+  // Commit gate modal
+  commitGateOpen?: boolean;
 }
 
 export interface LogEntry {
@@ -344,6 +345,55 @@ export class DashboardPanel {
       background: color-mix(in srgb, var(--error) 15%, transparent);
       color: var(--error);
       border: 1px solid var(--error);
+    }
+
+    /* Commit gate modal overlay */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal {
+      background: var(--bg);
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      min-width: 360px;
+      max-width: 480px;
+    }
+    .modal h2 { margin-bottom: 16px; }
+    .modal .stage-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-family: var(--vscode-editor-font-family);
+    }
+    .modal .stage-row .icon { width: 16px; text-align: center; }
+    .modal .stage-row .dur { color: var(--muted); margin-left: auto; font-size: 0.85em; }
+    .modal .modal-result {
+      margin-top: 16px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .modal .modal-result.passed {
+      background: color-mix(in srgb, var(--success) 15%, transparent);
+      color: var(--success);
+    }
+    .modal .modal-result.failed {
+      background: color-mix(in srgb, var(--error) 15%, transparent);
+      color: var(--error);
+    }
+    .modal .modal-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      justify-content: flex-end;
     }
   </style>
 </head>

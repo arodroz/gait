@@ -60,6 +60,7 @@ interface DashboardState {
   };
   regressions?: string[];
   flakyTests?: string[];
+  commitGateOpen?: boolean;
 }
 
 const STAGE_ICONS: Record<string, string> = {
@@ -308,6 +309,61 @@ function renderToDOM(container: HTMLElement, state: DashboardState): void {
 
   container.appendChild(buildLog(state.log));
   container.appendChild(buildActions(state));
+
+  // Commit gate modal overlay
+  const modal = buildCommitGateModal(state);
+  if (modal) container.appendChild(modal);
+}
+
+function buildCommitGateModal(state: DashboardState): HTMLElement | null {
+  if (!state.commitGateOpen || !state.lastGate) return null;
+
+  const overlay = el("div", { className: "modal-overlay" });
+  const modal = el("div", { className: "modal" });
+  overlay.appendChild(modal);
+
+  modal.appendChild(el("h2", {}, "\u229B Commit Gate"));
+
+  // Stage results
+  for (const s of state.stages) {
+    const row = el("div", { className: "stage-row" });
+    const icons: Record<string, string> = { passed: "\u2713", failed: "\u2717", skipped: "\u2013", running: "\u25CC", pending: "\u25CB" };
+    const colors: Record<string, string> = { passed: "var(--success)", failed: "var(--error)", skipped: "var(--muted)", running: "var(--warn)", pending: "var(--muted)" };
+    const icon = el("span", { className: "icon" }, icons[s.status] ?? "\u25CB");
+    icon.style.color = colors[s.status] ?? "";
+    row.appendChild(icon);
+    row.appendChild(el("span", {}, capitalize(s.name)));
+    if (s.duration > 0) {
+      row.appendChild(el("span", { className: "dur" }, `${(s.duration / 1000).toFixed(1)}s`));
+    }
+    modal.appendChild(row);
+  }
+
+  // Result banner
+  const passed = state.lastGate.passed;
+  const dur = (state.lastGate.duration / 1000).toFixed(1);
+  const resultDiv = el("div", { className: `modal-result ${passed ? "passed" : "failed"}` },
+    `${passed ? "\u2713 PASSED" : "\u2717 BLOCKED"} (${dur}s)`);
+  modal.appendChild(resultDiv);
+
+  // Action buttons
+  const actions = el("div", { className: "modal-actions" });
+  if (passed) {
+    const commitBtn = el("button", { className: "btn" }, "Commit");
+    commitBtn.addEventListener("click", () => vscode.postMessage({ command: "commitGateApprove" }));
+    actions.appendChild(commitBtn);
+  }
+  const cancelBtn = el("button", { className: "btn secondary" }, passed ? "Cancel" : "Close");
+  cancelBtn.addEventListener("click", () => vscode.postMessage({ command: "commitGateClose" }));
+  actions.appendChild(cancelBtn);
+  modal.appendChild(actions);
+
+  // Close on overlay click
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) vscode.postMessage({ command: "commitGateClose" });
+  });
+
+  return overlay;
 }
 
 // --- Message handler ---
