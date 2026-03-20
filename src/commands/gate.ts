@@ -12,7 +12,7 @@ import { BaselineStore } from "../core/baseline";
 import { FlakyTracker } from "../core/flaky";
 import { findUntested } from "../core/coverage";
 import { parseTestOutput } from "../core/test-parser";
-import { buildFixPrompt, runAutofixLoop } from "../core/autofix";
+import { runAutofixLoop } from "../core/autofix";
 import { blameError, enhancePromptWithBlame } from "../core/blame";
 import { reviewDiff, shouldBlock as reviewShouldBlock } from "../core/review";
 import { state, cap } from "../state";

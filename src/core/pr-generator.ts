@@ -26,7 +26,7 @@ export async function generate(cwd: string, baseBranch = "main"): Promise<PRSumm
     : [];
 
   // Diff stats
-  const statResult = await run(
+  await run(
     "git", ["diff", "--stat", `${baseBranch}...HEAD`], cwd, 10_000,
   );
   const numstatResult = await run(

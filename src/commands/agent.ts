@@ -11,10 +11,10 @@ import { buildFixPrompt, runAutofixLoop } from "../core/autofix";
 import { blameError, enhancePromptWithBlame } from "../core/blame";
 import { findUntested } from "../core/coverage";
 import { generateTests } from "../core/test-gen";
-import { reviewDiff, shouldBlock as reviewShouldBlock } from "../core/review";
+import { reviewDiff } from "../core/review";
 import type { StageName } from "../core/pipeline";
-import { state, cap } from "../state";
-import { logHistory, sendNotify, getStageCommand, getOutputChannel } from "./helpers";
+import { state } from "../state";
+import { getStageCommand, getOutputChannel } from "./helpers";
 import { cmdGate } from "./gate";
 
 export async function cmdRunAgent() {

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { install, uninstall, installAll, status, type HookType } from "./hook-scripts";
+import { install, uninstall, installAll, status } from "./hook-scripts";
 
 function tmpRepo(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gait-hooks-"));

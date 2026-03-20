@@ -4,7 +4,6 @@ import * as git from "../core/git";
 import * as monorepo from "../core/monorepo";
 import * as scripts from "../core/scripts";
 import { run } from "../core/runner";
-import { parseDuration } from "../core/util";
 import { HistoryLogger } from "../core/history";
 import { notify, type NotifyConfig, type NotifyPayload } from "../core/notify";
 import type { StageName } from "../core/pipeline";

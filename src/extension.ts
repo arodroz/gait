@@ -2,7 +2,6 @@ import * as vscode from "vscode";
 import * as config from "./core/config";
 import * as hooks from "./core/hooks";
 import * as snapshot from "./core/snapshot";
-import * as memory from "./core/memory";
 import { parseDuration } from "./core/util";
 import { AgentRunner } from "./core/agent";
 import { CostTracker } from "./core/cost-tracker";
