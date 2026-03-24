@@ -1,8 +1,8 @@
 {
   "name": "gait-quality-gate",
   "displayName": "gait — Guarded Agent Integration Tool",
-  "description": "Quality gate and pilot for AI coding agents",
-  "version": "0.3.1",
+  "description": "⚠️ Experimental — Quality gate and pilot for AI coding agents (personal project, not production-ready)",
+  "version": "0.3.2",
   "publisher": "arodroz",
   "icon": "assets/icon.png",
   "repository": {
