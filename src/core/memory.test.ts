@@ -3,7 +3,6 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { loadContext, loadMemory, saveMemory, addCorrection, addPattern, buildPromptPrefix, createDefaults, formatMemory } from "./memory";
-import type { Config } from "./config";
 
 function tmpDir(): string { return fs.mkdtempSync(path.join(os.tmpdir(), "gait-mem-")); }
 
@@ -48,7 +47,7 @@ describe("memory", () => {
 
   it("creates defaults", () => {
     const dir = tmpDir();
-    const cfg: Config = { project: { name: "test" }, stacks: { typescript: { Lint: "eslint", Test: "vitest", Typecheck: "tsc", Build: "" } }, pipeline: { stages: ["lint", "test"], timeout: "30s" } };
+    const cfg = { project: { name: "test", mode: "dev" } };
     createDefaults(dir, tmpDir(), cfg);
     expect(fs.existsSync(path.join(dir, "context.md"))).toBe(true);
     expect(fs.existsSync(path.join(dir, "memory.json"))).toBe(true);

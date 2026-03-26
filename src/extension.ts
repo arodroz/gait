@@ -1,26 +1,31 @@
 import * as vscode from "vscode";
 import * as config from "./core/config";
-import * as hooks from "./core/hooks";
 import * as snapshot from "./core/snapshot";
 import { parseDuration } from "./core/util";
 import { AgentRunner } from "./core/agent";
 import { CostTracker } from "./core/cost-tracker";
+import { ActionLogger } from "./core/action-logger";
+import { Interceptor } from "./core/interceptor";
+import { DecorationManager } from "./views/decorations";
 import { StatusBarManager } from "./views/statusbar";
-import { PipelineTreeProvider, ActionsTreeProvider, InfoTreeProvider, ScriptsTreeProvider } from "./views/sidebar";
+import { ActionsTreeProvider, InfoTreeProvider, DecisionsTreeProvider, AgentsTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
 import { state } from "./state";
 import { loadConfig, refreshFiles, sendNotify, getFirstChangedLine } from "./commands/helpers";
+import { getOutputChannel } from "./state";
 import { cmdInit } from "./commands/init";
-import { cmdGate, cmdRunStage } from "./commands/gate";
-import { cmdRunAgent, cmdFixStage, cmdCodeReview, cmdGenerateTests, cmdEditMemory, cmdViewMemory, cmdCostSummary } from "./commands/agent";
-import { cmdOpenDashboard, cmdRollback, cmdRecover, cmdPreflight, cmdGenerateAgentsMd,
-  cmdSnapshot, cmdRestoreSnapshot, cmdSwitchProfile, cmdRunWorkflow, cmdAuditDeps } from "./commands/misc";
-import { cmdRelease, cmdCreatePR } from "./commands/release";
-import { cmdRunScript, cmdListScripts, cmdDetectScripts } from "./commands/scripts";
-import { cmdInstallHook, cmdInstallAllHooks, cmdManageHooks } from "./commands/hooks";
-import type { StageName } from "./core/pipeline";
+import { cmdRunAgent, cmdCodeReview, cmdEditMemory, cmdViewMemory, cmdCostSummary } from "./commands/agent";
+import { cmdOpenDashboard, cmdRollback, cmdRecover, cmdPreflight,
+  cmdSnapshot, cmdRestoreSnapshot, cmdRunWorkflow } from "./commands/misc";
+import { cmdInstallClaudeHooks } from "./commands/claude-hooks-cmd";
+import { cmdRunCodex } from "./commands/codex-cmd";
+import { cmdOpenJournal, cmdExportJournal } from "./commands/journal";
+import { cmdGenerateAgentsMd } from "./commands/agents-md-cmd";
+import { detectLearnedPatterns, formatSuggestions } from "./core/learned-patterns";
 import * as path from "path";
 import * as git from "./core/git";
+
+let decorationManager: DecorationManager | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -29,56 +34,48 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Initialize components
   state.statusBar = new StatusBarManager();
-  state.pipelineTree = new PipelineTreeProvider();
+  state.decisionsTree = new DecisionsTreeProvider();
   state.actionsTree = new ActionsTreeProvider();
   state.infoTree = new InfoTreeProvider();
-  state.scriptsTree = new ScriptsTreeProvider();
+  state.agentsTree = new AgentsTreeProvider();
   state.dashboard = new DashboardPanel(context.extensionUri);
   state.agent = new AgentRunner();
   state.costTracker = new CostTracker(config.gaitDir(state.cwd));
 
   context.subscriptions.push(state.statusBar, state.dashboard);
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("gait.pipeline", state.pipelineTree),
+    vscode.window.registerTreeDataProvider("gait.decisions", state.decisionsTree),
     vscode.window.registerTreeDataProvider("gait.actions", state.actionsTree),
-    vscode.window.registerTreeDataProvider("gait.scripts", state.scriptsTree),
     vscode.window.registerTreeDataProvider("gait.info", state.infoTree),
+    vscode.window.registerTreeDataProvider("gait.agents", state.agentsTree),
   );
 
-  if (config.configExists(state.cwd)) loadConfig();
+  if (config.configExists(state.cwd)) {
+    loadConfig();
+    startInterceptor(context);
+    startDecorations(context);
+  }
 
-  // Register all commands
-  const commands: Record<string, () => Promise<unknown>> = {
+  // Register commands
+  const commands: Record<string, (...args: any[]) => Promise<unknown>> = {
     "gait.init": cmdInit,
-    "gait.gate": cmdGate,
-    "gait.runLint": () => cmdRunStage("lint"),
-    "gait.runTest": () => cmdRunStage("test"),
-    "gait.runTypecheck": () => cmdRunStage("typecheck"),
-    "gait.runBuild": () => cmdRunStage("build"),
     "gait.openDashboard": cmdOpenDashboard,
-    "gait.release": cmdRelease,
-    "gait.installHook": cmdInstallHook,
     "gait.runAgent": cmdRunAgent,
     "gait.rollback": cmdRollback,
     "gait.recover": cmdRecover,
     "gait.preflight": cmdPreflight,
-    "gait.generateAgentsMd": cmdGenerateAgentsMd,
-    "gait.runScript": cmdRunScript,
-    "gait.listScripts": cmdListScripts,
-    "gait.detectScripts": cmdDetectScripts,
     "gait.snapshot": cmdSnapshot,
     "gait.restoreSnapshot": cmdRestoreSnapshot,
-    "gait.switchProfile": cmdSwitchProfile,
-    "gait.createPR": cmdCreatePR,
     "gait.runWorkflow": cmdRunWorkflow,
     "gait.costSummary": cmdCostSummary,
     "gait.editMemory": cmdEditMemory,
     "gait.viewMemory": cmdViewMemory,
     "gait.codeReview": cmdCodeReview,
-    "gait.generateTestsForFile": cmdGenerateTests,
-    "gait.auditDeps": cmdAuditDeps,
-    "gait.installAllHooks": cmdInstallAllHooks,
-    "gait.manageHooks": cmdManageHooks,
+    "gait.installClaudeHooks": () => cmdInstallClaudeHooks(context.extensionUri.fsPath),
+    "gait.runCodex": cmdRunCodex,
+    "gait.openJournal": cmdOpenJournal,
+    "gait.exportJournal": cmdExportJournal,
+    "gait.generateAgentsMd": cmdGenerateAgentsMd,
   };
 
   for (const [id, handler] of Object.entries(commands)) {
@@ -88,26 +85,13 @@ export function activate(context: vscode.ExtensionContext) {
   // Dashboard action handler
   state.dashboard.onAction(async (msg) => {
     switch (msg.command) {
-      case "gate": await cmdGate(); break;
-      case "lint": await cmdRunStage("lint"); break;
-      case "test": await cmdRunStage("test"); break;
-      case "typecheck": await cmdRunStage("typecheck"); break;
-      case "build": await cmdRunStage("build"); break;
-      case "runStage": await cmdRunStage(msg.data as StageName); break;
       case "runAgent": await cmdRunAgent(); break;
       case "pauseAgent": state.agent.pause(); state.dashboard.addLog("Agent paused", "warn"); break;
       case "resumeAgent": state.agent.resume(); state.dashboard.addLog("Agent resumed", "info"); break;
       case "killAgent": state.agent.kill(); state.dashboard.addLog("Agent killed", "error"); break;
       case "rollback": await cmdRollback(); break;
-      case "release": await cmdRelease(); break;
-      case "commitGateApprove": state.dashboard.updateState({ commitGateOpen: false }); state.dashboard.addLog("Commit approved", "success"); break;
-      case "commitGateClose": state.dashboard.updateState({ commitGateOpen: false }); break;
       case "requestState": state.dashboard.updateState({}); break;
-      case "switchProfile": await cmdSwitchProfile(); break;
       case "restoreSnapshot": await cmdRestoreSnapshot(); break;
-      case "createPR": await cmdCreatePR(); break;
-      case "fixStage": await cmdFixStage(msg.data as string, false); break;
-      case "autofixStage": await cmdFixStage(msg.data as string, true); break;
       case "openDiff": {
         const uri = vscode.Uri.file(path.join(state.cwd, msg.data as string));
         await vscode.commands.executeCommand("git.openChange", uri);
@@ -139,24 +123,6 @@ export function activate(context: vscode.ExtensionContext) {
   watcher.onDidDelete(() => refreshFiles());
   context.subscriptions.push(watcher);
 
-  // Hook trigger watcher
-  if (config.configExists(state.cwd)) {
-    const hookInterval = setInterval(() => {
-      if (hooks.checkHookTrigger(config.gaitDir(state.cwd))) {
-        const savedProfile = state.currentProfile;
-        state.currentProfile = (state.cfg?.pipeline as any)?.commit_profile ?? "full";
-        state.dashboard.open();
-        state.dashboard.updateState({ commitGateOpen: true });
-        cmdGate().then((passed) => {
-          state.currentProfile = savedProfile;
-          state.dashboard.updateState({ commitGateOpen: true });
-          hooks.writeHookResult(config.gaitDir(state.cwd), passed !== false);
-        });
-      }
-    }, 1000);
-    context.subscriptions.push({ dispose: () => clearInterval(hookInterval) });
-  }
-
   // Agent events
   state.agent.on("output", (line: string) => {
     state.dashboard.addLog(`[agent] ${line}`, "info");
@@ -169,32 +135,31 @@ export function activate(context: vscode.ExtensionContext) {
 
   state.agent.on("done", async (_code: number, duration: number) => {
     if (state.diffPollInterval) { clearInterval(state.diffPollInterval); state.diffPollInterval = undefined; }
-    const retention = parseDuration((state.cfg?.pipeline as any)?.snapshot_retention ?? "24h");
+    const retention = parseDuration(state.cfg?.snapshots.retention ?? "48h");
     snapshot.prune(state.cwd, config.gaitDir(state.cwd), retention).catch(() => {});
 
     const dur = (duration / 1000).toFixed(1);
     const tokens = state.agent.estimateTokens();
-    const taskDesc = state.agent.currentSession?.prompt ?? "";
     const agentKind = state.agent.currentSession?.kind ?? "";
     state.dashboard.addLog(`Agent finished (${dur}s, ~${(tokens / 1000).toFixed(1)}k tokens)`, "success");
     state.dashboard.updateState({ agentRunning: false, agentPaused: false, agentTokens: tokens });
 
-    state.costTracker.estimateFromLines(agentKind, taskDesc, state.agent.currentSession?.lines ?? 0, duration);
+    state.costTracker.estimateFromLines(agentKind, state.agent.currentSession?.prompt ?? "", state.agent.currentSession?.lines ?? 0, duration);
     sendNotify("agent.done", `Agent ${agentKind} finished (${dur}s)`, { tokens, duration: dur });
-
-    const gatePassed = await cmdGate();
 
     const stats = await git.diffStat(state.cwd).catch(() => []);
     state.dashboard.updateState({
       review: {
-        taskDesc, agentKind, duration, tokens,
+        taskDesc: state.agent.currentSession?.prompt ?? "", agentKind, duration, tokens,
         filesChanged: stats.length,
         additions: stats.reduce((s, f) => s + f.additions, 0),
         deletions: stats.reduce((s, f) => s + f.deletions, 0),
-        gatePassed: gatePassed !== false,
+        gatePassed: true,
       },
     });
-    sendNotify(gatePassed ? "gate.passed" : "gate.failed", `Gate ${gatePassed ? "passed" : "failed"} after agent`, {});
+
+    // Refresh decorations after agent finishes
+    decorationManager?.refreshAll();
   });
 
   state.agent.on("error", (err: string) => {
@@ -206,6 +171,78 @@ export function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand("setContext", "gait.initialized", config.configExists(state.cwd));
 }
 
+function startInterceptor(context: vscode.ExtensionContext) {
+  if (!state.cfg) return;
+  const gaitDir = config.gaitDir(state.cwd);
+  const logger = new ActionLogger(gaitDir);
+  const interceptor = new Interceptor(state.cwd, gaitDir, state.cfg, logger, async (action, decision, evaluation) => {
+    const level = decision.decision === "reject" ? "warn" : "info";
+    state.dashboard.addLog(
+      `[${action.agent}] ${action.tool} ${action.files.join(", ")} → ${decision.decision} (${evaluation.severity})`,
+      level,
+    );
+
+    // Update decisions tree
+    const records = await logger.readRecent(20);
+    state.decisionsTree.update(records);
+
+    // Refresh decorations
+    decorationManager?.refreshAll();
+  });
+
+  const disposable = interceptor.start();
+  state.interceptorWatcher = disposable as any;
+  context.subscriptions.push(disposable);
+
+  // Load initial decisions tree + check for learned patterns
+  logger.readRecent(50).then((records) => {
+    state.decisionsTree.update(records.slice(-20));
+
+    const suggestions = detectLearnedPatterns(records);
+    if (suggestions.length > 0) {
+      const msg = formatSuggestions(suggestions);
+      vscode.window.showInformationMessage(
+        `HITL-Gate: ${suggestions.length} path pattern(s) frequently rejected. View suggestions?`,
+        "View",
+      ).then((choice) => {
+        if (choice === "View") {
+          const ch = getOutputChannel("HITL-Gate: Suggestions");
+          ch.clear();
+          ch.appendLine(msg);
+          ch.show(true);
+        }
+      });
+    }
+  });
+}
+
+function startDecorations(context: vscode.ExtensionContext) {
+  const gaitDir = config.gaitDir(state.cwd);
+  const logger = new ActionLogger(gaitDir);
+  decorationManager = new DecorationManager(context.extensionUri.fsPath, state.cwd, logger);
+
+  // Apply decorations when editor changes
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor) decorationManager?.applyToEditor(editor);
+    }),
+  );
+
+  // Clear decorations on git commit
+  const commitWatcher = vscode.workspace.createFileSystemWatcher("**/.git/COMMIT_EDITMSG");
+  commitWatcher.onDidChange(() => decorationManager?.clearAll());
+  context.subscriptions.push(commitWatcher);
+
+  context.subscriptions.push({ dispose: () => decorationManager?.dispose() });
+
+  // Apply to current editor
+  if (vscode.window.activeTextEditor) {
+    decorationManager.applyToEditor(vscode.window.activeTextEditor);
+  }
+}
+
 export function deactivate() {
   if (state.diffPollInterval) clearInterval(state.diffPollInterval);
+  if (state.interceptorWatcher) state.interceptorWatcher.dispose();
+  decorationManager?.dispose();
 }

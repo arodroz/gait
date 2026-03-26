@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { detectStacks, defaultConfig, save, load, configExists } from "./config";
+import { detectStacks, save, load, configExists, saveMinimal, DEFAULT_CONFIG } from "./config";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "gait-test-"));
@@ -26,12 +26,6 @@ describe("detectStacks", () => {
     expect(detectStacks(dir)).toContain("typescript");
   });
 
-  it("detects python from pyproject.toml", () => {
-    const dir = tmpDir();
-    fs.writeFileSync(path.join(dir, "pyproject.toml"), "");
-    expect(detectStacks(dir)).toContain("python");
-  });
-
   it("detects multiple stacks", () => {
     const dir = tmpDir();
     fs.writeFileSync(path.join(dir, "go.mod"), "module test");
@@ -43,45 +37,56 @@ describe("detectStacks", () => {
   });
 });
 
-describe("defaultConfig", () => {
-  it("creates config with detected stacks", () => {
-    const cfg = defaultConfig("myproject", ["go"]);
-    expect(cfg.project.name).toBe("myproject");
-    expect(cfg.stacks.go).toBeDefined();
-    expect(cfg.stacks.go.Test).toBe("go test ./...");
-    expect(cfg.pipeline.stages).toEqual(["lint", "typecheck", "test"]);
-  });
-
-  it("creates config with no stacks", () => {
-    const cfg = defaultConfig("empty", []);
-    expect(cfg.stacks).toEqual({});
-  });
-});
-
-describe("save and load", () => {
+describe("save and load (HitlConfig)", () => {
   it("round-trips config through TOML", () => {
     const dir = tmpDir();
-    const cfg = defaultConfig("test", ["go"]);
+    const cfg = { ...DEFAULT_CONFIG, project: { name: "test-project", mode: "dev" as const } };
     save(dir, cfg);
 
     expect(configExists(dir)).toBe(true);
 
     const loaded = load(dir);
-    expect(loaded.project.name).toBe("test");
-    expect(loaded.stacks.go.Test).toBe("go test ./...");
-    expect(loaded.pipeline.stages).toEqual(["lint", "typecheck", "test"]);
+    expect(loaded.project.name).toBe("test-project");
+    expect(loaded.project.mode).toBe("dev");
+    expect(loaded.agents.claude_enabled).toBe(true);
+    expect(loaded.interception.auto_accept_timeout_ms).toBe(10000);
+    expect(loaded.reviewer.enabled).toBe(true);
+    expect(loaded.decision_points.interface_change).toBe(true);
+    expect(loaded.snapshots.retention).toBe("48h");
   });
 
-  it("throws on missing config", () => {
-    const dir = tmpDir();
-    expect(() => load(dir)).toThrow();
-  });
-
-  it("throws on invalid config missing sections", () => {
+  it("deep-merges partial config over defaults", () => {
     const dir = tmpDir();
     const gaitDir = path.join(dir, ".gait");
     fs.mkdirSync(gaitDir, { recursive: true });
-    fs.writeFileSync(path.join(gaitDir, "config.toml"), "[other]\nfoo = 1\n");
-    expect(() => load(dir)).toThrow("missing");
+    fs.writeFileSync(path.join(gaitDir, "config.toml"), `[project]\nname = "partial"\nmode = "prod"\n`);
+
+    const loaded = load(dir);
+    expect(loaded.project.name).toBe("partial");
+    expect(loaded.project.mode).toBe("prod");
+    // Defaults should fill in missing sections
+    expect(loaded.agents.claude_enabled).toBe(true);
+    expect(loaded.reviewer.timeout_ms).toBe(8000);
+  });
+
+  it("throws on missing config file", () => {
+    const dir = tmpDir();
+    expect(() => load(dir)).toThrow();
+  });
+});
+
+describe("saveMinimal", () => {
+  it("creates a minimal config and loads with defaults", () => {
+    const dir = tmpDir();
+    saveMinimal(dir, "my-project");
+
+    expect(configExists(dir)).toBe(true);
+
+    const loaded = load(dir);
+    expect(loaded.project.name).toBe("my-project");
+    expect(loaded.project.mode).toBe("dev");
+    expect(loaded.reviewer.enabled).toBe(true);
+    // All defaults should be present
+    expect(loaded.decision_points.file_deleted).toBe(true);
   });
 });

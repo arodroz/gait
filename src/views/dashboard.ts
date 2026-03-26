@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import type { PipelineResult, StageResult, StageName } from "../core/pipeline";
 import { DASHBOARD_CSS } from "./dashboard-styles";
 
 /** State sent to the webview */
@@ -9,12 +8,8 @@ export interface DashboardState {
   branch: string;
   stacks: string[];
   clean: boolean;
-  stages: StageResult[];
   log: LogEntry[];
   files: FileChange[];
-  pipelineRunning: boolean;
-  lastGate?: { passed: boolean; duration: number };
-  configuredStages: string[];
   agentRunning?: boolean;
   agentPaused?: boolean;
   agentKind?: string;
@@ -33,12 +28,6 @@ export interface DashboardState {
     deletions: number;
     gatePassed: boolean;
   };
-  regressions?: string[];
-  flakyTests?: string[];
-  coverage?: { file: string; name: string }[];
-  coverageStatus?: "running" | "done" | "error";
-  coverageError?: string;
-  commitGateOpen?: boolean;
 }
 
 export interface LogEntry {
@@ -71,11 +60,8 @@ export class DashboardPanel {
       branch: "",
       stacks: [],
       clean: true,
-      stages: [],
       log: [],
       files: [],
-      pipelineRunning: false,
-      configuredStages: [],
     };
   }
 
@@ -87,7 +73,7 @@ export class DashboardPanel {
 
     this.panel = vscode.window.createWebviewPanel(
       "gait.dashboard",
-      "Gait Dashboard",
+      "HITL-Gate Dashboard",
       vscode.ViewColumn.Two,
       {
         enableScripts: true,
@@ -126,35 +112,6 @@ export class DashboardPanel {
     if (this.state.log.length > 200) {
       this.state.log = this.state.log.slice(-200);
     }
-    this.pushState();
-  }
-
-  updateStage(result: StageResult): void {
-    const idx = this.state.stages.findIndex((s) => s.name === result.name);
-    if (idx >= 0) {
-      this.state.stages[idx] = result;
-    } else {
-      this.state.stages.push(result);
-    }
-    this.pushState();
-  }
-
-  setPipelineResult(result: PipelineResult): void {
-    this.state.stages = result.stages;
-    this.state.pipelineRunning = false;
-    this.state.lastGate = { passed: result.passed, duration: result.duration };
-    this.pushState();
-  }
-
-  resetStages(names: StageName[]): void {
-    this.state.stages = names.map((name) => ({
-      name,
-      status: "pending" as const,
-      output: "",
-      error: "",
-      duration: 0,
-    }));
-    this.state.pipelineRunning = true;
     this.pushState();
   }
 

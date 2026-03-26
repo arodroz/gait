@@ -7,15 +7,9 @@ import * as snapshot from "../core/snapshot";
 import * as prompts from "../core/prompts";
 import * as memory from "../core/memory";
 import { getCurrentDiffs } from "../core/diff-watcher";
-import { buildFixPrompt, runAutofixLoop } from "../core/autofix";
-import { blameError, enhancePromptWithBlame } from "../core/blame";
-import { findUntested } from "../core/coverage";
-import { generateTests } from "../core/test-gen";
 import { reviewDiff } from "../core/review";
-import type { StageName } from "../core/pipeline";
 import { state } from "../state";
-import { getStageCommand, getOutputChannel } from "./helpers";
-import { cmdGate } from "./gate";
+import { getOutputChannel } from "./helpers";
 
 export async function cmdRunAgent() {
   if (state.agent.running) {
@@ -56,13 +50,6 @@ export async function cmdRunAgent() {
   }
   if (!prompt) return;
 
-  // Budget check
-  const budget = (state.cfg?.pipeline as any)?.daily_budget_usd ?? 0;
-  if (budget > 0 && !state.costTracker.canRun(budget)) {
-    vscode.window.showWarningMessage(`Daily budget ($${budget}) exceeded.`);
-    return;
-  }
-
   // Snapshot
   const snap = await snapshot.take(state.cwd, config.gaitDir(state.cwd));
   state.dashboard.addLog(`Snapshot: ${snap.id}`, "info");
@@ -97,49 +84,6 @@ export async function cmdRunAgent() {
   }
 }
 
-export async function cmdFixStage(stageName: string, autoLoop: boolean) {
-  const failedStage = state.lastPipelineResult?.stages.find((s) => s.name === stageName && s.status === "failed");
-  if (!failedStage) { vscode.window.showWarningMessage(`No failure data for '${stageName}'`); return; }
-
-  const available: string[] = [];
-  if ((await prereq.commandExists("claude")).passed) available.push("claude");
-  if ((await prereq.commandExists("codex")).passed) available.push("codex");
-  if (!available.length) { vscode.window.showWarningMessage("No AI agents on PATH."); return; }
-
-  const agentKind = available.length === 1 ? available[0] : await vscode.window.showQuickPick(available, { placeHolder: "Select agent" });
-  if (!agentKind) return;
-
-  const stageCmd = getStageCommand(stageName as StageName);
-
-  if (autoLoop) {
-    const blameInfo = await blameError(state.cwd, failedStage.error + "\n" + failedStage.output);
-    const blameCtx = blameInfo ? enhancePromptWithBlame("", blameInfo) : undefined;
-    if (blameInfo) state.dashboard.addLog(`Blame: ${blameInfo.commitHash.slice(0, 8)} by ${blameInfo.author}`, "info");
-    state.dashboard.addLog(`Auto-fix loop: ${stageName} (max 3)`, "info");
-    const fixed = await runAutofixLoop(failedStage, state.cwd, agentKind as any, 3, () => cmdGate(),
-      {
-        onAttemptStart: (n, max) => { state.dashboard.addLog(`Fix ${n}/${max}...`, "info"); state.dashboard.updateState({ agentRunning: true, agentKind, agentPaused: false }); },
-        onAttemptEnd: (r) => { state.dashboard.updateState({ agentRunning: false }); state.dashboard.addLog(r.success ? `Fixed on ${r.attempt}` : `Attempt ${r.attempt} failed`, r.success ? "success" : "warn"); },
-        onAgentOutput: (line) => state.dashboard.addLog(`[fix] ${line}`, "info"),
-        onGateStart: () => state.dashboard.addLog("Re-running gate...", "info"),
-        onGateResult: (passed) => { if (passed) state.dashboard.addLog("Gate passed!", "success"); },
-      }, stageCmd, blameCtx);
-    if (!fixed) { memory.addCorrection(config.gaitDir(state.cwd), failedStage.error.slice(0, 200), "Autofix failed", "autofix"); vscode.window.showWarningMessage("Auto-fix exhausted."); }
-  } else {
-    let fullPrompt = buildFixPrompt(failedStage, state.cwd, stageCmd);
-    const memPrefix = memory.buildPromptPrefix(config.gaitDir(state.cwd));
-    if (memPrefix) fullPrompt = memPrefix + "\n\n---\n\n" + fullPrompt;
-    const blame = await blameError(state.cwd, failedStage.error + "\n" + failedStage.output);
-    if (blame) { fullPrompt = enhancePromptWithBlame(fullPrompt, blame); state.dashboard.addLog(`Blame: ${blame.commitHash.slice(0, 8)}`, "info"); }
-    const extra = await vscode.window.showInputBox({ prompt: "Extra context (optional)", placeHolder: "Leave empty to send as-is" });
-    if (extra === undefined) return;
-    const finalPrompt = extra ? `${extra}\n\n---\n\n${fullPrompt}` : fullPrompt;
-    state.dashboard.addLog(`Sending fix to ${agentKind}...`, "info");
-    state.dashboard.updateState({ agentRunning: true, agentKind, agentPrompt: `Fix: ${stageName}`, agentPaused: false });
-    try { await state.agent.start(agentKind as any, finalPrompt, state.cwd); } catch (err) { state.dashboard.addLog(`Failed: ${err}`, "error"); state.dashboard.updateState({ agentRunning: false }); }
-  }
-}
-
 export async function cmdCodeReview() {
   if (!state.cfg) { vscode.window.showWarningMessage("Run 'Gait: Initialize Project' first."); return; }
   state.dashboard.addLog("Running AI code review...", "info");
@@ -159,31 +103,6 @@ export async function cmdCodeReview() {
   }
 }
 
-export async function cmdGenerateTests() {
-  if (!state.cfg) { vscode.window.showWarningMessage("Run 'Gait: Initialize Project' first."); return; }
-  const files = await vscode.window.showOpenDialog({ canSelectMany: false, openLabel: "Select source file", filters: { "Source": ["ts", "js", "py", "go"] } });
-  if (!files?.length) return;
-  const sourceFile = path.relative(state.cwd, files[0].fsPath);
-  const stack = Object.keys(state.cfg.stacks)[0] ?? "";
-  let testCmd = ""; for (const s of Object.values(state.cfg.stacks)) { if (s.Test) { testCmd = s.Test; break; } }
-  state.dashboard.addLog(`Analyzing coverage for ${sourceFile}...`, "info");
-  const covResult = await findUntested(state.cwd, [sourceFile], stack);
-  const uncovered = covResult.uncovered.length > 0 ? covResult.uncovered.map((u) => u.name) : ["(all exported functions)"];
-  state.dashboard.addLog(`Generating tests for ${uncovered.length} function(s)...`, "info");
-  const result = await generateTests(state.cwd, config.gaitDir(state.cwd), sourceFile, uncovered, testCmd, "claude",
-    (line) => state.dashboard.addLog(`[testgen] ${line}`, "info"));
-  if (result.passed) {
-    state.dashboard.addLog(`Tests generated: ${result.testFile}`, "success");
-    const doc = await vscode.workspace.openTextDocument(path.join(state.cwd, result.testFile));
-    await vscode.window.showTextDocument(doc);
-    memory.addPattern(config.gaitDir(state.cwd), "testing", `Generated tests for ${sourceFile}`, "learned");
-  } else {
-    state.dashboard.addLog(`Tests failed: ${result.error}`, "error");
-    memory.addCorrection(config.gaitDir(state.cwd), `Test gen for ${sourceFile}`, result.error ?? "unknown", "autofix");
-    vscode.window.showWarningMessage("Generated tests didn't pass. Reverted.");
-  }
-}
-
 export async function cmdEditMemory() {
   const contextPath = path.join(config.gaitDir(state.cwd), "context.md");
   if (!state.cfg) return;
@@ -199,13 +118,11 @@ export async function cmdViewMemory() {
 }
 
 export async function cmdCostSummary() {
-  const budget = (state.cfg?.pipeline as any)?.daily_budget_usd ?? 0;
-  const summary = state.costTracker.summary(budget);
+  const summary = state.costTracker.summary(0);
   const ch = getOutputChannel("Gait: Costs"); ch.clear();
-  ch.appendLine(`Today:      $${summary.today.toFixed(2)}${budget > 0 ? ` / $${budget.toFixed(2)} (${summary.budgetUsedPct}%)` : ""}`);
+  ch.appendLine(`Today:      $${summary.today.toFixed(2)}`);
   ch.appendLine(`This week:  $${summary.thisWeek.toFixed(2)}`);
   ch.appendLine(`This month: $${summary.thisMonth.toFixed(2)}`);
   ch.appendLine(`Sessions:   ${summary.sessions}`);
-  if (summary.overBudget) ch.appendLine("\nOVER BUDGET");
   ch.show(true);
 }

@@ -1,6 +1,14 @@
 import { AgentRunner, type AgentKind } from "./agent";
-import type { StageResult } from "./pipeline";
 import * as fs from "fs";
+
+/** Inline type — originally from pipeline.ts (removed in Phase 0) */
+interface StageResult {
+  name: string;
+  status: string;
+  output: string;
+  error: string;
+  duration: number;
+}
 
 export interface FixAttempt {
   attempt: number;

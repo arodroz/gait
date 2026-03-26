@@ -3,7 +3,13 @@ import { buildFixPrompt } from "./autofix";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import type { StageResult } from "./pipeline";
+interface StageResult {
+  name: string;
+  status: string;
+  output: string;
+  error: string;
+  duration: number;
+}
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "gait-autofix-"));

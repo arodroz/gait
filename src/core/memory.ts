@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { detectStacks, type Config } from "./config";
+import { detectStacks } from "./config";
 
 const CONTEXT_FILE = "context.md";
 const MEMORY_FILE = "memory.json";
@@ -99,7 +99,7 @@ export function buildPromptPrefix(gaitDir: string, maxTokens = 2000): string {
 }
 
 /** Generate starter context.md from project config */
-export function generateStarterContext(cwd: string, cfg: Config): string {
+export function generateStarterContext(cwd: string, cfg: { project: { name: string; mode?: string } }): string {
   const stacks = detectStacks(cwd);
   const lines: string[] = [];
 
@@ -107,23 +107,12 @@ export function generateStarterContext(cwd: string, cfg: Config): string {
   lines.push("");
   lines.push(`## Stack: ${stacks.join(", ") || "unknown"}`);
   lines.push("");
-
-  lines.push("## Pipeline");
-  lines.push(`Stages: ${cfg.pipeline.stages.join(" → ")}`);
+  lines.push(`## Mode: ${cfg.project.mode ?? "dev"}`);
   lines.push("");
-
-  for (const [stack, cmds] of Object.entries(cfg.stacks)) {
-    lines.push(`## ${stack} commands`);
-    if (cmds.Lint) lines.push(`- Lint: \`${cmds.Lint}\``);
-    if (cmds.Test) lines.push(`- Test: \`${cmds.Test}\``);
-    if (cmds.Typecheck) lines.push(`- Typecheck: \`${cmds.Typecheck}\``);
-    if (cmds.Build) lines.push(`- Build: \`${cmds.Build}\``);
-    lines.push("");
-  }
 
   lines.push("## Conventions");
   lines.push("- Use conventional commits (feat:, fix:, chore:)");
-  lines.push("- Run the quality gate before every commit");
+  lines.push("- All agent actions are intercepted and reviewed");
   lines.push("- Do not commit secrets or API keys");
   lines.push("");
   lines.push("<!-- Add project-specific context below -->");
@@ -132,7 +121,7 @@ export function generateStarterContext(cwd: string, cfg: Config): string {
 }
 
 /** Create default context.md and empty memory.json */
-export function createDefaults(gaitDir: string, cwd: string, cfg: Config): void {
+export function createDefaults(gaitDir: string, cwd: string, cfg: { project: { name: string; mode?: string } }): void {
   const contextPath = path.join(gaitDir, CONTEXT_FILE);
   if (!fs.existsSync(contextPath)) {
     fs.writeFileSync(contextPath, generateStarterContext(cwd, cfg));

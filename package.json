@@ -1,8 +1,8 @@
 {
   "name": "gait-quality-gate",
-  "displayName": "gait — Guarded Agent Integration Tool",
-  "description": "⚠️ Experimental — Quality gate and pilot for AI coding agents (personal project, not production-ready)",
-  "version": "0.3.2",
+  "displayName": "HITL-Gate — Human-in-the-Loop for AI Agents",
+  "description": "⚠️ Experimental — Intercept, evaluate, and decide on AI agent actions before they write code",
+  "version": "0.4.0",
   "publisher": "arodroz",
   "icon": "assets/icon.png",
   "repository": {
@@ -25,109 +25,107 @@
     "commands": [
       {
         "command": "gait.init",
-        "title": "Gait: Initialize Project"
-      },
-      {
-        "command": "gait.gate",
-        "title": "Gait: Run Quality Gate"
-      },
-      {
-        "command": "gait.runLint",
-        "title": "Gait: Run Lint"
-      },
-      {
-        "command": "gait.runTest",
-        "title": "Gait: Run Tests"
-      },
-      {
-        "command": "gait.runTypecheck",
-        "title": "Gait: Run Typecheck"
-      },
-      {
-        "command": "gait.runBuild",
-        "title": "Gait: Run Build"
+        "title": "HITL-Gate: Initialize Project"
       },
       {
         "command": "gait.openDashboard",
-        "title": "Gait: Open Dashboard"
-      },
-      {
-        "command": "gait.release",
-        "title": "Gait: Release"
-      },
-      {
-        "command": "gait.installHook",
-        "title": "Gait: Install Pre-Commit Hook"
+        "title": "HITL-Gate: Open Dashboard"
       },
       {
         "command": "gait.runAgent",
-        "title": "Gait: Run Agent"
+        "title": "HITL-Gate: Run Agent"
       },
       {
         "command": "gait.rollback",
-        "title": "Gait: Rollback Assistant"
+        "title": "HITL-Gate: Rollback Assistant"
       },
       {
         "command": "gait.recover",
-        "title": "Gait: Recover (Cleanup)"
+        "title": "HITL-Gate: Recover (Cleanup)"
       },
       {
         "command": "gait.preflight",
-        "title": "Gait: Environment Check"
+        "title": "HITL-Gate: Environment Check"
+      },
+      {
+        "command": "gait.snapshot",
+        "title": "HITL-Gate: Take Snapshot"
+      },
+      {
+        "command": "gait.restoreSnapshot",
+        "title": "HITL-Gate: Restore Snapshot"
+      },
+      {
+        "command": "gait.runWorkflow",
+        "title": "HITL-Gate: Run Workflow"
+      },
+      {
+        "command": "gait.costSummary",
+        "title": "HITL-Gate: Cost Summary"
+      },
+      {
+        "command": "gait.editMemory",
+        "title": "HITL-Gate: Edit Agent Memory"
+      },
+      {
+        "command": "gait.viewMemory",
+        "title": "HITL-Gate: View Memory"
+      },
+      {
+        "command": "gait.codeReview",
+        "title": "HITL-Gate: AI Code Review"
+      },
+      {
+        "command": "gait.installClaudeHooks",
+        "title": "HITL-Gate: Install Claude Code Hooks"
+      },
+      {
+        "command": "gait.runCodex",
+        "title": "HITL-Gate: Run Codex Task"
+      },
+      {
+        "command": "gait.openJournal",
+        "title": "HITL-Gate: Open Decisions Journal"
+      },
+      {
+        "command": "gait.exportJournal",
+        "title": "HITL-Gate: Export Journal as Markdown"
       },
       {
         "command": "gait.generateAgentsMd",
-        "title": "Gait: Generate AGENTS.md"
-      },
-      {
-        "command": "gait.runScript",
-        "title": "Gait: Run Script"
-      },
-      {
-        "command": "gait.listScripts",
-        "title": "Gait: List Scripts"
-      },
-      {
-        "command": "gait.detectScripts",
-        "title": "Gait: Detect Script Patterns"
-      },
-      { "command": "gait.snapshot", "title": "Gait: Take Snapshot" },
-      { "command": "gait.restoreSnapshot", "title": "Gait: Restore Snapshot" },
-      { "command": "gait.switchProfile", "title": "Gait: Switch Pipeline Profile" },
-      { "command": "gait.createPR", "title": "Gait: Create Pull Request" },
-      { "command": "gait.runWorkflow", "title": "Gait: Run Workflow" },
-      { "command": "gait.costSummary", "title": "Gait: Cost Summary" },
-      { "command": "gait.editMemory", "title": "Gait: Edit Agent Memory" },
-      { "command": "gait.viewMemory", "title": "Gait: View Memory" },
-      { "command": "gait.codeReview", "title": "Gait: AI Code Review" },
-      { "command": "gait.generateTestsForFile", "title": "Gait: Generate Tests for File" },
-      { "command": "gait.auditDeps", "title": "Gait: Audit Dependencies" },
-      { "command": "gait.installAllHooks", "title": "Gait: Install All Hooks" },
-      { "command": "gait.manageHooks", "title": "Gait: Manage Hooks" }
+        "title": "HITL-Gate: Generate AGENTS.md"
+      }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "gait",
-          "title": "Gait",
+          "title": "HITL-Gate",
           "icon": "$(shield)"
         }
       ]
     },
     "views": {
       "gait": [
-        { "id": "gait.pipeline", "name": "Pipeline" },
-        { "id": "gait.scripts", "name": "Scripts" },
-        { "id": "gait.actions", "name": "Quick Actions" },
-        { "id": "gait.info", "name": "Project" }
+        {
+          "id": "gait.decisions",
+          "name": "Decisions"
+        },
+        {
+          "id": "gait.actions",
+          "name": "Quick Actions"
+        },
+        {
+          "id": "gait.info",
+          "name": "Project"
+        },
+        {
+          "id": "gait.agents",
+          "name": "Agents"
+        }
       ]
     },
     "keybindings": [
-      {
-        "command": "gait.gate",
-        "key": "ctrl+shift+g",
-        "mac": "cmd+shift+g"
-      },
       {
         "command": "gait.openDashboard",
         "key": "ctrl+shift+d",
@@ -137,7 +135,7 @@
     ]
   },
   "scripts": {
-    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild src/webview/main.ts --bundle --outfile=out/webview.js --format=iife --sourcemap",
+    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild src/webview/main.ts --bundle --outfile=out/webview.js --format=iife --sourcemap && esbuild src/bridge/hitlgate-bridge.ts --bundle --outfile=out/hitlgate-bridge.js --platform=node --format=cjs --sourcemap",
     "watch": "npm run compile -- --watch",
     "lint": "tsc --noEmit && eslint src/",
     "test": "vitest run",
@@ -156,6 +154,8 @@
     "vitest": "^4.1.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
+    "openai": "^6.33.0",
     "smol-toml": "^1.3.0"
   }
 }
