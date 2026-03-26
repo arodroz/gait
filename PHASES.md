@@ -1,5 +1,7 @@
 # HITL-Gate — Implementation Phases
 
+> **Status (March 2026):** All four phases are implemented and passing (242 tests, 0 type errors). This document is preserved as a design record of the implementation order and rationale.
+
 Each phase is a self-contained unit of work. Complete and verify each phase before starting the next. Each phase ends with a working, committable state.
 
 ---

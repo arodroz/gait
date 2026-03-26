@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/gait-quality%20gate-7C3AED?style=for-the-badge&logo=shield&logoColor=white" alt="gait" />
+  <img src="https://img.shields.io/badge/HITL--Gate-human--in--the--loop-7C3AED?style=for-the-badge&logo=shield&logoColor=white" alt="HITL-Gate" />
 </p>
 
-<h3 align="center">Quality gate and pilot for AI coding agents</h3>
+<h3 align="center">Human-in-the-Loop interception for AI coding agents</h3>
 
 <p align="center">
   <a href="https://code.visualstudio.com"><img src="https://img.shields.io/badge/VS%20Code-1.85%2B-007ACC?style=flat-square&logo=visualstudiocode" alt="VS Code" /></a>
@@ -14,9 +14,9 @@
 > **This is an experimental personal project — not production-ready.**
 >
 > I'm building this in my spare time to explore ideas around AI agent
-> guardrails. Expect rough edges, half-finished features, breaking changes,
-> and long stretches with no updates. There are no guarantees of stability,
-> support, or maintenance.
+> guardrails. Expect rough edges, breaking changes, and long stretches
+> with no updates. There are no guarantees of stability, support, or
+> maintenance.
 >
 > Feel free to look around, steal ideas, or open issues — just know what
 > you're getting into.
@@ -25,23 +25,23 @@
 
 ## What it does
 
-gait is a VS Code extension that tries to add quality gates around AI coding agents — linting, testing, typechecking, build verification, and more.
+HITL-Gate is a VS Code extension that intercepts AI agent actions **before** they write files, evaluates their severity, and presents the human with the right level of decision support at the right time.
 
-**Gate** — runs your pipeline stages (lint, typecheck, test, audit, review) in dependency order with early abort.
+> The agent proposes. The human decides. Never surprised by what the code became.
 
-**Agents** — launch Claude or Codex from VS Code with token tracking, pause/resume/kill, and auto-gate after sessions.
+**Intercept** — Claude Code and Codex actions are caught via hooks before file writes. Each action is evaluated against 7 detection types (interface change, file deleted, schema change, prod file, cross-agent conflict, public API change, file renamed).
 
-**Autofix** — when a stage fails, an agent gets the error + source + blame context and attempts a fix.
+**Evaluate** — Actions are scored by severity (low / medium / high). Low-severity actions show a toast notification with auto-accept. Medium-severity opens a decision panel. High-severity shows a blocking modal requiring explicit approval.
 
-**Memory** — agents accumulate project context (conventions, past corrections) across sessions.
+**Review** — On medium/high severity, a cross-agent adversarial reviewer analyzes the action (Claude reviews Codex, Codex reviews Claude) with a hardcoded skeptical prompt that cannot be overridden.
 
-**Workflows** — define multi-step agent pipelines in YAML.
+**Decide** — The human accepts, rejects, or rejects-with-note. Every decision is logged to an append-only JSONL audit trail. Gutter decorations show which agent modified each line.
 
-...and a bunch of other stuff in various states of completeness.
+**Learn** — Rejection patterns are detected automatically and surfaced as config suggestions. The decisions journal provides filterable history and markdown export.
 
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
 git clone https://github.com/arodroz/gait.git && cd gait
@@ -52,8 +52,72 @@ npm install && npm run compile
 Then:
 
 ```
-Cmd+Shift+P → Gait: Initialize Project
-Cmd+Shift+G → Run Quality Gate
+Cmd+Shift+P → HITL-Gate: Initialize Project
+Cmd+Shift+P → HITL-Gate: Install Claude Code Hooks
+Cmd+Shift+D → Open Dashboard
+```
+
+---
+
+## How it works
+
+```
+Claude Code / Codex
+        │
+        ▼
+  hitlgate-bridge        ← PreToolUse hook (file-based IPC)
+        │
+  .gait/pending/<id>.json
+        │
+        ▼
+  Interceptor             ← VS Code FileSystemWatcher
+        │
+  decision-points.evaluate()
+        │
+  ┌─────┼─────┐
+  low  med  high          ← severity → presentation
+  │     │     │
+ toast panel modal        ← human decides
+        │
+  .gait/decisions/<id>.json
+        │
+  bridge reads → exit 0 (accept) or exit 2 (reject)
+        │
+  actions.jsonl           ← append-only audit log
+```
+
+---
+
+## Key commands
+
+| Command | Description |
+|---------|-------------|
+| `HITL-Gate: Initialize Project` | Set up `.gait/` config and directories |
+| `HITL-Gate: Install Claude Code Hooks` | Wire Claude Code's PreToolUse hook |
+| `HITL-Gate: Open Dashboard` | Webview with pending decisions, logs, history |
+| `HITL-Gate: Run Agent` | Launch Claude or Codex with snapshot + tracking |
+| `HITL-Gate: Run Codex Task` | Run Codex CLI with interception |
+| `HITL-Gate: Open Decisions Journal` | Browse/filter decision history |
+| `HITL-Gate: AI Code Review` | Run AI review on current diff |
+| `HITL-Gate: Generate AGENTS.md` | Generate agent guidance with rejection patterns |
+
+---
+
+## Config
+
+`.gait/config.toml` — created by `Initialize Project`:
+
+```toml
+[project]
+name = "my-project"
+mode = "dev"   # "prod" disables auto-accept entirely
+
+[prod]
+paths = ["src/api/**", "migrations/**"]  # high-severity globs
+
+[reviewer]
+enabled = true
+# Requires ANTHROPIC_API_KEY and/or OPENAI_API_KEY in environment
 ```
 
 ---
@@ -62,9 +126,9 @@ Cmd+Shift+G → Run Quality Gate
 
 ```bash
 npm install              # dependencies
-npm run compile          # build extension + webview
+npm run compile          # build extension + webview + bridge
 npm run lint             # tsc + eslint
-npm test                 # tests
+npm test                 # vitest (242 tests)
 npm run watch            # rebuild on change
 ```
 
