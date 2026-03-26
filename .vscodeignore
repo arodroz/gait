@@ -1,7 +1,12 @@
 src/**
 node_modules/**
 .gait/**
+.claude/**
+.vscode/**
+SPECS/**
 *.md
 !README.md
 tsconfig.json
 .gitignore
+eslint.config.js
+vitest.config.ts
