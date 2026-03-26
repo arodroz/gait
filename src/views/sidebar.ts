@@ -10,7 +10,15 @@ export class DecisionsTreeProvider implements vscode.TreeDataProvider<DecisionIt
   private records: ActionRecord[] = [];
 
   update(records: ActionRecord[]): void {
-    this.records = records.slice(-20).reverse();
+    // Only show interesting decisions: rejections, high/medium severity, or those with reviewer analysis
+    const interesting = records.filter((r) =>
+      r.human_decision === "reject" ||
+      r.human_decision === "edit" ||
+      r.severity === "high" ||
+      r.severity === "medium" ||
+      r.reviewer_analysis !== null && r.reviewer_analysis !== undefined,
+    );
+    this.records = interesting.slice(-15).reverse();
     this._onDidChange.fire(undefined);
   }
 
@@ -20,26 +28,52 @@ export class DecisionsTreeProvider implements vscode.TreeDataProvider<DecisionIt
 
   getChildren(): DecisionItem[] {
     if (this.records.length === 0) {
-      const empty = new DecisionItem("No decisions yet", "circle-outline", "");
-      empty.description = "Actions will appear here";
+      const empty = new DecisionItem("All clear", "check", "");
+      empty.description = "No flagged decisions";
       return [empty];
     }
 
     return this.records.map((r) => {
-      const isAccepted = r.human_decision === "accept" || r.human_decision === "auto_accept";
-      const icon = isAccepted ? "pass-filled" : "error";
-      const color = isAccepted ? "testing.iconPassed" : "testing.iconFailed";
-      const files = r.files.slice(0, 2).join(", ") + (r.files.length > 2 ? ` +${r.files.length - 2}` : "");
-      const label = `${r.agent} · ${r.tool}`;
+      const isRejected = r.human_decision === "reject" || r.human_decision === "edit";
+      const severityIcon = r.severity === "high" ? "warning"
+        : r.severity === "medium" ? "info"
+        : isRejected ? "error" : "pass-filled";
+      const severityColor = isRejected ? "testing.iconFailed"
+        : r.severity === "high" ? "list.warningForeground"
+        : "testing.iconPassed";
 
-      const item = new DecisionItem(label, icon, files);
-      item.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
+      const files = r.files.slice(0, 2).map((f) => f.split("/").pop()).join(", ");
+      const filesExtra = r.files.length > 2 ? ` +${r.files.length - 2}` : "";
+      const label = `${r.severity.toUpperCase()} · ${isRejected ? "rejected" : "accepted"}`;
+
+      const item = new DecisionItem(label, severityIcon, `${files}${filesExtra}`);
+      item.iconPath = new vscode.ThemeIcon(severityIcon, new vscode.ThemeColor(severityColor));
+
+      // Click to open the first modified file
+      if (r.files.length > 0) {
+        item.command = {
+          command: "vscode.open",
+          title: "Open file",
+          arguments: [vscode.Uri.file(r.files[0])],
+        };
+      }
+
+      const reviewerLine = r.reviewer_analysis
+        ? `\n\nReviewer (${r.reviewer_analysis.reviewerAgent}): **${r.reviewer_analysis.recommendation}**` +
+          (r.reviewer_analysis.divergences.length > 0 ? `\n- ${r.reviewer_analysis.divergences.join("\n- ")}` : "")
+        : "";
+
+      const flagLines = r.decision_points.length > 0
+        ? `\n\nFlags:\n${r.decision_points.map((dp) => `- ${dp.description}`).join("\n")}`
+        : "";
+
       item.tooltip = new vscode.MarkdownString(
-        `**${r.agent}** · ${r.tool}\n\n` +
-        `*${r.intent}*\n\n` +
-        `Files: ${r.files.join(", ")}\n\n` +
-        `Severity: **${r.severity}** · Decision: **${r.human_decision}**` +
-        (r.human_note ? `\n\n> ${r.human_note}` : ""),
+        `**${r.agent}** · ${r.tool} · ${r.severity}\n\n` +
+        `*${r.intent || "(no intent)"}*\n\n` +
+        `Files: ${r.files.join(", ")}` +
+        flagLines +
+        (r.human_note ? `\n\n> ${r.human_note}` : "") +
+        reviewerLine,
       );
 
       return item;

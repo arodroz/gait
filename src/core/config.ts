@@ -101,19 +101,21 @@ export function detectStacks(dir: string): Stack[] {
 
 // ── Deep merge utility ──
 
-function deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
-  const result = { ...target };
+type JsonObject = Record<string, unknown>;
+
+function isPlainObject(value: unknown): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepMerge(target: JsonObject, source: JsonObject): JsonObject {
+  const result: JsonObject = { ...target };
   for (const key of Object.keys(source)) {
-    if (
-      source[key] !== null &&
-      typeof source[key] === "object" &&
-      !Array.isArray(source[key]) &&
-      typeof target[key] === "object" &&
-      !Array.isArray(target[key])
-    ) {
-      result[key] = deepMerge(target[key], source[key]);
+    const sourceValue = source[key];
+    const targetValue = target[key];
+    if (isPlainObject(sourceValue) && isPlainObject(targetValue)) {
+      result[key] = deepMerge(targetValue, sourceValue);
     } else {
-      result[key] = source[key];
+      result[key] = sourceValue;
     }
   }
   return result;
@@ -124,8 +126,8 @@ function deepMerge(target: Record<string, any>, source: Record<string, any>): Re
 export function load(dir: string): HitlConfig {
   const configPath = path.join(dir, DOT_DIR, CONFIG_FILE);
   const raw = fs.readFileSync(configPath, "utf-8");
-  const parsed = parseToml(raw) as Record<string, unknown>;
-  const merged = deepMerge(DEFAULT_CONFIG, parsed) as HitlConfig;
+  const parsed = parseToml(raw) as JsonObject;
+  const merged = deepMerge(DEFAULT_CONFIG as unknown as JsonObject, parsed) as unknown as HitlConfig;
   return validateConfig(merged);
 }
 

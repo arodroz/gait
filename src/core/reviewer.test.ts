@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { review } from "./reviewer";
 import type { PendingAction } from "./action-logger";
-import { DEFAULT_CONFIG, type HitlConfig } from "./config";
+import { DEFAULT_CONFIG } from "./config";
 
 // Mock the SDK imports
 vi.mock("@anthropic-ai/sdk", () => ({
@@ -22,7 +22,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
         }],
       }),
     };
-    constructor(_opts: any) {}
+    constructor(_opts: { apiKey: string }) {}
   },
 }));
 
@@ -47,7 +47,7 @@ vi.mock("openai", () => ({
         }),
       },
     };
-    constructor(_opts: any) {}
+    constructor(_opts: { apiKey: string }) {}
   },
 }));
 

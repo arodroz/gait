@@ -3,6 +3,24 @@ import * as path from "path";
 
 const HITLGATE_TAG = "_hitlgate";
 
+interface ClaudeHookCommand {
+  type: string;
+  command: string;
+  [HITLGATE_TAG]?: boolean;
+  [key: string]: unknown;
+}
+
+interface ClaudeHookMatcher {
+  matcher: string;
+  hooks: ClaudeHookCommand[];
+  [key: string]: unknown;
+}
+
+interface ClaudeHooksSettings {
+  hooks?: Record<string, ClaudeHookMatcher[]>;
+  [key: string]: unknown;
+}
+
 /**
  * Generate the hooks config object for .claude/settings.json.
  * The bridge path must be absolute.
@@ -37,9 +55,9 @@ export async function installHooks(workspaceRoot: string, bridgePath: string): P
   await fs.promises.mkdir(claudeDir, { recursive: true });
 
   // Read existing settings
-  let existing: Record<string, any> = {};
+  let existing: ClaudeHooksSettings = {};
   try {
-    existing = JSON.parse(await fs.promises.readFile(settingsPath, "utf8"));
+    existing = JSON.parse(await fs.promises.readFile(settingsPath, "utf8")) as ClaudeHooksSettings;
   } catch { /* no existing file — start fresh */ }
 
   const newConfig = generateHooksConfig(bridgePath);
@@ -92,27 +110,27 @@ function extractBridgePath(command: string): string {
 }
 
 function mergeHooksConfig(
-  existing: Record<string, any>,
-  newConfig: Record<string, any>,
-): Record<string, any> {
-  const result = { ...existing };
+  existing: ClaudeHooksSettings,
+  newConfig: ClaudeHooksSettings,
+): ClaudeHooksSettings {
+  const result: ClaudeHooksSettings = { ...existing };
 
   if (!result.hooks) result.hooks = {};
   if (!newConfig.hooks) return result;
 
-  for (const [hookType, entries] of Object.entries(newConfig.hooks as Record<string, any[]>)) {
+  for (const [hookType, entries] of Object.entries(newConfig.hooks)) {
     if (!result.hooks[hookType]) {
       result.hooks[hookType] = entries;
       continue;
     }
 
     // Check if our hook already exists (tagged with _hitlgate)
-    const existingEntries = result.hooks[hookType] as any[];
+    const existingEntries = result.hooks[hookType];
     let replaced = false;
 
     for (let i = 0; i < existingEntries.length; i++) {
       const hooks = existingEntries[i].hooks ?? [];
-      const hasHitlgate = hooks.some((h: any) => h[HITLGATE_TAG]);
+      const hasHitlgate = hooks.some((h) => h[HITLGATE_TAG]);
       if (hasHitlgate) {
         // Replace the whole entry
         existingEntries[i] = entries[0];

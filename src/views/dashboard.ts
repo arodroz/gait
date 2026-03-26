@@ -37,12 +37,18 @@ export interface DashboardState {
       files: string[];
       intent: string;
       diff_preview?: string;
+      session_context?: string;
     };
     evaluation: {
       points: string[];
       severity: string;
       explanations: Record<string, string>;
     };
+    fileDiffs?: Array<{
+      path: string;
+      diff: string;
+      originalContent?: string;
+    }>;
     reviewerAnalysis?: {
       reviewerAgent: string;
       recommendation: string;
@@ -55,6 +61,38 @@ export interface DashboardState {
     } | null;
     reviewerLoading?: boolean;
   };
+  pendingQueue?: Array<{
+    action: {
+      id: string;
+      agent: string;
+      tool: string;
+      files: string[];
+      intent: string;
+      diff_preview?: string;
+      session_context?: string;
+    };
+    evaluation: {
+      points: string[];
+      severity: string;
+      explanations: Record<string, string>;
+    };
+    fileDiffs?: Array<{
+      path: string;
+      diff: string;
+      originalContent?: string;
+    }>;
+    reviewerAnalysis?: {
+      reviewerAgent: string;
+      recommendation: string;
+      confidence: number;
+      divergences: string[];
+      risks: string[];
+      suggestion?: string;
+      understood_intent: string;
+      actual_action: string;
+    } | null;
+    reviewerLoading?: boolean;
+  }>;
   recentDecisions?: Array<{
     id: string;
     agent: string;
@@ -64,6 +102,7 @@ export interface DashboardState {
     severity: string;
     human_decision: string;
     human_note?: string;
+    diff_ref?: string;
     ts: string;
   }>;
 }

@@ -5,11 +5,12 @@ import { parseDuration } from "./core/util";
 import { AgentRunner } from "./core/agent";
 import { CostTracker } from "./core/cost-tracker";
 import { ActionLogger } from "./core/action-logger";
-import { Interceptor } from "./core/interceptor";
+import { Interceptor, type WebviewPendingData } from "./core/interceptor";
 import { DecorationManager } from "./views/decorations";
 import { StatusBarManager } from "./views/statusbar";
 import { ActionsTreeProvider, InfoTreeProvider, DecisionsTreeProvider, AgentsTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
+import type { DashboardState } from "./views/dashboard";
 import { state } from "./state";
 import { loadConfig, refreshFiles, getFirstChangedLine } from "./commands/helpers";
 import { getOutputChannel } from "./state";
@@ -57,7 +58,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   // Register commands
-  const commands: Record<string, (...args: any[]) => Promise<unknown>> = {
+  const commands: Record<string, (...args: unknown[]) => Promise<unknown>> = {
     "gait.init": cmdInit,
     "gait.openDashboard": cmdOpenDashboard,
     "gait.runAgent": cmdRunAgent,
@@ -137,10 +138,16 @@ export function activate(context: vscode.ExtensionContext) {
       }
       case "decision": {
         const { id, decision, note } = msg.data as { id: string; decision: string; note?: string };
-        const decisionPath = path.join(config.gaitDir(state.cwd), "decisions", `${id}.json`);
-        const fs = await import("fs");
-        await fs.promises.mkdir(path.dirname(decisionPath), { recursive: true });
-        await fs.promises.writeFile(decisionPath, JSON.stringify({ id, decision, note, ts: new Date().toISOString() }));
+        // Try to resolve via interceptor first (rich webview flow)
+        if (sharedInterceptor) {
+          sharedInterceptor.resolveWebviewDecision(id, decision as "accept" | "reject" | "edit", note);
+        } else {
+          // Fallback: write decision file directly
+          const decisionPath = path.join(config.gaitDir(state.cwd), "decisions", `${id}.json`);
+          const fs = await import("fs");
+          await fs.promises.mkdir(path.dirname(decisionPath), { recursive: true });
+          await fs.promises.writeFile(decisionPath, JSON.stringify({ id, decision, note, ts: new Date().toISOString() }));
+        }
         state.dashboard.updateState({ pendingDecision: undefined });
         state.dashboard.addLog(`Decision: ${decision} for ${id}`, decision === "accept" ? "success" : "warn");
         break;
@@ -152,10 +159,14 @@ export function activate(context: vscode.ExtensionContext) {
           placeHolder: "Scope changes to the new route only, do not modify existing middleware",
         });
         if (note !== undefined) {
-          const decisionPath = path.join(config.gaitDir(state.cwd), "decisions", `${actionId}.json`);
-          const fs = await import("fs");
-          await fs.promises.mkdir(path.dirname(decisionPath), { recursive: true });
-          await fs.promises.writeFile(decisionPath, JSON.stringify({ id: actionId, decision: "reject", note, ts: new Date().toISOString() }));
+          if (sharedInterceptor) {
+            sharedInterceptor.resolveWebviewDecision(actionId, "reject", note);
+          } else {
+            const decisionPath = path.join(config.gaitDir(state.cwd), "decisions", `${actionId}.json`);
+            const fs = await import("fs");
+            await fs.promises.mkdir(path.dirname(decisionPath), { recursive: true });
+            await fs.promises.writeFile(decisionPath, JSON.stringify({ id: actionId, decision: "reject", note, ts: new Date().toISOString() }));
+          }
           state.dashboard.updateState({ pendingDecision: undefined });
           state.dashboard.addLog(`Rejected with note: ${actionId}`, "warn");
         }
@@ -226,6 +237,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 let sharedLogger: ActionLogger | undefined;
+let sharedInterceptor: Interceptor | undefined;
 
 function startInterceptor(context: vscode.ExtensionContext) {
   if (!state.cfg) return;
@@ -242,7 +254,7 @@ function startInterceptor(context: vscode.ExtensionContext) {
     if (decision.decision === "reject" && decision.note) {
       try {
         const { addCorrection } = await import("./core/memory");
-        addCorrection(gaitDir, `${action.intent} → ${action.files.join(", ")}`, decision.note, "human");
+        addCorrection(gaitDir, `${action.intent} → ${action.files.join(", ")}`, decision.note, "user");
       } catch { /* memory write is best-effort */ }
     }
 
@@ -260,8 +272,15 @@ function startInterceptor(context: vscode.ExtensionContext) {
 
     // Refresh decorations
     decorationManager?.refreshAll();
+  }, (pendingData: WebviewPendingData) => {
+    // Show rich decision UI in the webview dashboard
+    state.dashboard.open();
+    state.dashboard.updateState({ pendingDecision: pendingData as DashboardState["pendingDecision"] });
+  }, (queue: NonNullable<DashboardState["pendingQueue"]>) => {
+    state.dashboard.updateState({ pendingQueue: queue as DashboardState["pendingQueue"] });
   });
 
+  sharedInterceptor = interceptor;
   const disposable = interceptor.start();
   state.interceptorWatcher = disposable;
   context.subscriptions.push(disposable);

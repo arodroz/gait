@@ -38,6 +38,29 @@ export async function diffStat(cwd: string): Promise<FileStat[]> {
     });
 }
 
+export async function diffFiles(cwd: string, files: string[]): Promise<string> {
+  if (files.length === 0) return "";
+  const args = ["diff", "--no-color", "--", ...files];
+  const r = await git(cwd, ...args);
+  return r.stdout;
+}
+
+export async function diffFilesCached(cwd: string, files: string[]): Promise<string> {
+  if (files.length === 0) return "";
+  const args = ["diff", "--cached", "--no-color", "--", ...files];
+  const r = await git(cwd, ...args);
+  return r.stdout;
+}
+
+export async function showFile(cwd: string, filePath: string): Promise<string> {
+  try {
+    const r = await git(cwd, "show", `HEAD:${filePath}`);
+    return r.stdout;
+  } catch {
+    return "";
+  }
+}
+
 export async function isClean(cwd: string): Promise<boolean> {
   const d = await diff(cwd);
   return d === "";

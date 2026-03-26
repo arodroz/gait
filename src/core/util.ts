@@ -11,5 +11,3 @@ export function parseDuration(s: string): number {
     default: return 300_000;
   }
 }
-
-

@@ -41,13 +41,6 @@ interface PendingAction {
   ts: string;
 }
 
-interface DecisionResult {
-  id: string;
-  decision: "accept" | "reject" | "edit";
-  note?: string;
-  ts: string;
-}
-
 // ── Helpers ──
 
 function generateActionId(): string {

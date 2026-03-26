@@ -1,6 +1,5 @@
 import type { HitlConfig, Severity } from "./config";
 import type { PendingAction, ActionRecord } from "./action-logger";
-import * as path from "path";
 
 // ── Types ──
 

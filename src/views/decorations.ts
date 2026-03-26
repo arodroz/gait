@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ActionLogger, type ActionRecord } from "../core/action-logger";
+import { ActionLogger } from "../core/action-logger";
 import { run } from "../core/runner";
 
 export class DecorationManager {

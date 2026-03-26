@@ -232,7 +232,7 @@ function rejectAfter(ms: number, reason: string): Promise<never> & { cancel: () 
   let handle: ReturnType<typeof setTimeout>;
   const promise = new Promise<never>((_, reject) => {
     handle = setTimeout(() => reject(new Error(reason)), ms);
-  });
-  (promise as any).cancel = () => clearTimeout(handle!);
-  return promise as Promise<never> & { cancel: () => void };
+  }) as Promise<never> & { cancel: () => void };
+  promise.cancel = () => clearTimeout(handle);
+  return promise;
 }

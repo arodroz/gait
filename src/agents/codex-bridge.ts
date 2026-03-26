@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import * as readline from "readline";
 import * as fs from "fs";
 import * as path from "path";
-import { findGaitDir, pollForDecision, sleep } from "../core/find-gait-dir";
+import { pollForDecision } from "../core/find-gait-dir";
 
 interface PendingAction {
   id: string;
@@ -13,13 +13,6 @@ interface PendingAction {
   intent: string;
   diff_preview?: string;
   session_context?: string;
-  ts: string;
-}
-
-interface DecisionResult {
-  id: string;
-  decision: "accept" | "reject" | "edit";
-  note?: string;
   ts: string;
 }
 
