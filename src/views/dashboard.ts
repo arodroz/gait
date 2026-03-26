@@ -28,6 +28,44 @@ export interface DashboardState {
     deletions: number;
     gatePassed: boolean;
   };
+  // HITL decision UI
+  pendingDecision?: {
+    action: {
+      id: string;
+      agent: string;
+      tool: string;
+      files: string[];
+      intent: string;
+      diff_preview?: string;
+    };
+    evaluation: {
+      points: string[];
+      severity: string;
+      explanations: Record<string, string>;
+    };
+    reviewerAnalysis?: {
+      reviewerAgent: string;
+      recommendation: string;
+      confidence: number;
+      divergences: string[];
+      risks: string[];
+      suggestion?: string;
+      understood_intent: string;
+      actual_action: string;
+    } | null;
+    reviewerLoading?: boolean;
+  };
+  recentDecisions?: Array<{
+    id: string;
+    agent: string;
+    tool: string;
+    files: string[];
+    intent: string;
+    severity: string;
+    human_decision: string;
+    human_note?: string;
+    ts: string;
+  }>;
 }
 
 export interface LogEntry {

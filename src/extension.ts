@@ -113,6 +113,32 @@ export function activate(context: vscode.ExtensionContext) {
         }
         break;
       }
+      case "decision": {
+        const { id, decision, note } = msg.data as { id: string; decision: string; note?: string };
+        const decisionPath = path.join(config.gaitDir(state.cwd), "decisions", `${id}.json`);
+        const fs = await import("fs");
+        await fs.promises.mkdir(path.dirname(decisionPath), { recursive: true });
+        await fs.promises.writeFile(decisionPath, JSON.stringify({ id, decision, note, ts: new Date().toISOString() }));
+        state.dashboard.updateState({ pendingDecision: undefined });
+        state.dashboard.addLog(`Decision: ${decision} for ${id}`, decision === "accept" ? "success" : "warn");
+        break;
+      }
+      case "editPrompt": {
+        const actionId = msg.data as string;
+        const note = await vscode.window.showInputBox({
+          prompt: "Add a note for the agent (included in rejection message)",
+          placeHolder: "Scope changes to the new route only, do not modify existing middleware",
+        });
+        if (note !== undefined) {
+          const decisionPath = path.join(config.gaitDir(state.cwd), "decisions", `${actionId}.json`);
+          const fs = await import("fs");
+          await fs.promises.mkdir(path.dirname(decisionPath), { recursive: true });
+          await fs.promises.writeFile(decisionPath, JSON.stringify({ id: actionId, decision: "reject", note, ts: new Date().toISOString() }));
+          state.dashboard.updateState({ pendingDecision: undefined });
+          state.dashboard.addLog(`Rejected with note: ${actionId}`, "warn");
+        }
+        break;
+      }
     }
   });
 

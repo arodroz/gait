@@ -16,9 +16,10 @@ export async function cmdRunCodex(): Promise<void> {
       "Cancel",
     );
     if (enable !== "Enable") return;
-    // User should manually set codex_enabled = true in config
-    vscode.window.showInformationMessage("Set `codex_enabled = true` in .gait/config.toml");
-    return;
+    state.cfg.agents.codex_enabled = true;
+    config.save(state.cwd, state.cfg);
+    state.agentsTree.update(state.cfg.agents.claude_enabled, true);
+    vscode.window.showInformationMessage("Codex enabled.");
   }
 
   const task = await vscode.window.showInputBox({
