@@ -159,6 +159,7 @@ export class DashboardPanel {
 
   dispose(): void {
     this.panel?.dispose();
+    this._onAction.dispose();
     for (const d of this.disposables) d.dispose();
   }
 

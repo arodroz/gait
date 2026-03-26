@@ -12,16 +12,4 @@ export function parseDuration(s: string): number {
   }
 }
 
-/** Format milliseconds as human-readable duration */
-export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const min = Math.floor(ms / 60_000);
-  const sec = Math.round((ms % 60_000) / 1000);
-  return `${min}m${sec}s`;
-}
 
-/** Get current timestamp as HH:MM:SS */
-export function timestamp(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
-}

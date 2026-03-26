@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import * as readline from "readline";
 import * as fs from "fs";
 import * as path from "path";
-import { findGaitDir } from "../core/find-gait-dir";
+import { findGaitDir, pollForDecision, sleep } from "../core/find-gait-dir";
 
 interface PendingAction {
   id: string;
@@ -27,33 +27,6 @@ function generateActionId(): string {
   const ts = new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
   const rand = Math.random().toString(36).slice(2, 6);
   return `act_${ts}_${rand}`;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function pollForDecision(
-  gaitDir: string,
-  id: string,
-  timeoutMs = 120000,
-  intervalMs = 200,
-): Promise<DecisionResult> {
-  const decisionPath = path.join(gaitDir, "decisions", `${id}.json`);
-  const start = Date.now();
-
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const raw = await fs.promises.readFile(decisionPath, "utf8");
-      const decision = JSON.parse(raw) as DecisionResult;
-      await fs.promises.unlink(decisionPath).catch(() => {});
-      return decision;
-    } catch {
-      await sleep(intervalMs);
-    }
-  }
-
-  return { id, decision: "reject", note: "timeout", ts: new Date().toISOString() };
 }
 
 /**
@@ -162,10 +135,15 @@ export async function runCodexWithInterception(
   });
 
   return new Promise((resolve) => {
-    proc.on("close", (code) => {
+    proc.on("close", async (code) => {
+      // Drain any in-flight approval decisions before resolving
+      await processingLock.catch(() => {});
+      rl.close();
       resolve({ exitCode: code ?? 0 });
     });
-    proc.on("error", () => {
+    proc.on("error", async () => {
+      await processingLock.catch(() => {});
+      rl.close();
       resolve({ exitCode: 1 });
     });
   });

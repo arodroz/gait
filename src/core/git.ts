@@ -6,13 +6,6 @@ export interface FileStat {
   deletions: number;
 }
 
-export interface Commit {
-  hash: string;
-  subject: string;
-  author: string;
-  date: string;
-}
-
 async function git(cwd: string, ...args: string[]) {
   return run("git", args, cwd, 30_000);
 }
@@ -42,18 +35,6 @@ export async function diffStat(cwd: string): Promise<FileStat[]> {
         additions: parseInt(add, 10) || 0,
         deletions: parseInt(del, 10) || 0,
       };
-    });
-}
-
-export async function log(cwd: string, n = 10): Promise<Commit[]> {
-  const r = await git(cwd, "log", `-${n}`, "--pretty=format:%H|%s|%an|%aI");
-  return r.stdout
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const [hash, subject, author, date] = line.split("|");
-      return { hash, subject, author, date };
     });
 }
 

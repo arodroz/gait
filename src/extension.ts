@@ -83,7 +83,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   // Dashboard action handler
-  state.dashboard.onAction(async (msg) => {
+  context.subscriptions.push(state.dashboard.onAction(async (msg) => {
     switch (msg.command) {
       case "runAgent": await cmdRunAgent(); break;
       case "pauseAgent": state.agent.pause(); state.dashboard.addLog("Agent paused", "warn"); break;
@@ -97,8 +97,8 @@ export function activate(context: vscode.ExtensionContext) {
             state.dashboard.updateState({
               recentDecisions: records.reverse().map((r) => ({
                 id: r.id, agent: r.agent, tool: r.tool, files: r.files,
-                severity: r.severity, decision: r.human_decision,
-                ts: r.ts, intent: r.intent,
+                severity: r.severity, human_decision: r.human_decision,
+                human_note: r.human_note, ts: r.ts, intent: r.intent,
               })),
             });
           }).catch(() => {});
@@ -162,7 +162,7 @@ export function activate(context: vscode.ExtensionContext) {
         break;
       }
     }
-  });
+  }));
 
   // File watcher — scope to tracked files, exclude .git and node_modules
   const watcher = vscode.workspace.createFileSystemWatcher(
@@ -238,6 +238,14 @@ function startInterceptor(context: vscode.ExtensionContext) {
       level,
     );
 
+    // Record rejections as corrections in memory for future agent context
+    if (decision.decision === "reject" && decision.note) {
+      try {
+        const { addCorrection } = await import("./core/memory");
+        addCorrection(gaitDir, `${action.intent} → ${action.files.join(", ")}`, decision.note, "human");
+      } catch { /* memory write is best-effort */ }
+    }
+
     // Update decisions tree + dashboard recent decisions
     const records = await sharedLogger!.readRecent(20);
     state.decisionsTree.update(records);
@@ -245,8 +253,8 @@ function startInterceptor(context: vscode.ExtensionContext) {
       pendingDecision: undefined,
       recentDecisions: records.slice(-10).reverse().map((r) => ({
         id: r.id, agent: r.agent, tool: r.tool, files: r.files,
-        severity: r.severity, decision: r.human_decision,
-        ts: r.ts, intent: r.intent,
+        severity: r.severity, human_decision: r.human_decision,
+        human_note: r.human_note, ts: r.ts, intent: r.intent,
       })),
     });
 
@@ -264,8 +272,8 @@ function startInterceptor(context: vscode.ExtensionContext) {
     state.dashboard.updateState({
       recentDecisions: records.slice(-10).reverse().map((r) => ({
         id: r.id, agent: r.agent, tool: r.tool, files: r.files,
-        severity: r.severity, decision: r.human_decision,
-        ts: r.ts, intent: r.intent,
+        severity: r.severity, human_decision: r.human_decision,
+        human_note: r.human_note, ts: r.ts, intent: r.intent,
       })),
     });
 

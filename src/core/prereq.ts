@@ -16,15 +16,6 @@ export async function commandExists(name: string): Promise<CheckResult> {
   };
 }
 
-export async function envVarSet(name: string): Promise<CheckResult> {
-  const val = process.env[name];
-  return {
-    name: `$${name}`,
-    passed: !!val,
-    error: !val ? `$${name} is not set` : undefined,
-  };
-}
-
 export async function runDefaultChecks(stacks: string[]): Promise<CheckResult[]> {
   const checks: Promise<CheckResult>[] = [commandExists("git")];
 

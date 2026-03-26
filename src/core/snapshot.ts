@@ -7,7 +7,6 @@ export interface Snapshot {
   timestamp: number;
   branch: string;
   commitHash: string;
-  stashRef?: string;
 }
 
 const SNAPSHOTS_FILE = "snapshots.json";
@@ -18,29 +17,11 @@ export async function take(cwd: string, gaitDir: string): Promise<Snapshot> {
   const hashResult = await run("git", ["rev-parse", "HEAD"], cwd, 5000);
   const id = `gait-snap-${Date.now()}`;
 
-  // Stash any uncommitted changes (including untracked)
-  const stashResult = await run("git", ["stash", "push", "-u", "-m", id], cwd, 30_000);
-  let stashRef: string | undefined;
-
-  if (stashResult.exitCode === 0 && !stashResult.stdout.includes("No local changes")) {
-    // Get the stash ref
-    const listResult = await run("git", ["stash", "list", "--max-count=1"], cwd, 5000);
-    stashRef = listResult.stdout.trim().split(":")[0]; // e.g., "stash@{0}"
-    // Immediately pop — we just wanted to record it, not leave the tree clean
-    const popResult = await run("git", ["stash", "pop"], cwd, 30_000);
-    if (popResult.exitCode !== 0) {
-      console.warn(`[hitlgate] git stash pop failed: ${popResult.stderr}`);
-      // Don't record the stash ref if pop failed — state is ambiguous
-      stashRef = undefined;
-    }
-  }
-
   const snapshot: Snapshot = {
     id,
     timestamp: Date.now(),
     branch: branchResult.stdout.trim(),
     commitHash: hashResult.stdout.trim(),
-    stashRef,
   };
 
   // Also create a lightweight tag as a restore point

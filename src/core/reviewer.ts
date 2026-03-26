@@ -73,6 +73,7 @@ async function reviewWithClaude(
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
   const client = new Anthropic({ apiKey });
 
+  const timeout = rejectAfter(timeoutMs, "reviewer timeout");
   const response = await Promise.race([
     client.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -80,8 +81,9 @@ async function reviewWithClaude(
       system: ADVERSARIAL_SYSTEM_PROMPT,
       messages: [{ role: "user", content: prompt }],
     }),
-    rejectAfter(timeoutMs, "reviewer timeout"),
+    timeout,
   ]);
+  timeout.cancel();
 
   const block = (response as { content: Array<{ type: string; text?: string }> }).content[0];
   if (!block || block.type !== "text" || !block.text) {
@@ -101,6 +103,7 @@ async function reviewWithCodex(
   const { default: OpenAI } = await import("openai");
   const client = new OpenAI({ apiKey });
 
+  const timeout = rejectAfter(timeoutMs, "reviewer timeout");
   const response = await Promise.race([
     client.chat.completions.create({
       model: "codex-mini-latest",
@@ -111,8 +114,9 @@ async function reviewWithCodex(
       ],
       response_format: { type: "json_object" },
     }),
-    rejectAfter(timeoutMs, "reviewer timeout"),
+    timeout,
   ]);
+  timeout.cancel();
 
   const content = (response as { choices: Array<{ message: { content: string | null } }> }).choices[0]?.message?.content;
   if (!content) {
@@ -224,6 +228,11 @@ function mapConfidence(val: string): number {
   return 0.3;
 }
 
-function rejectAfter(ms: number, reason: string): Promise<never> {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error(reason)), ms));
+function rejectAfter(ms: number, reason: string): Promise<never> & { cancel: () => void } {
+  let handle: ReturnType<typeof setTimeout>;
+  const promise = new Promise<never>((_, reject) => {
+    handle = setTimeout(() => reject(new Error(reason)), ms);
+  });
+  (promise as any).cancel = () => clearTimeout(handle!);
+  return promise as Promise<never> & { cancel: () => void };
 }

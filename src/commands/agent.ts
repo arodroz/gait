@@ -20,6 +20,15 @@ export async function cmdRunAgent() {
     return;
   }
 
+  // Budget check
+  const budgetLimit = state.cfg?.budget?.daily_limit_usd ?? 0;
+  if (budgetLimit > 0 && !state.costTracker.canRun(budgetLimit)) {
+    const override = await vscode.window.showWarningMessage(
+      `Daily budget ($${budgetLimit}) exceeded. Continue anyway?`, "Continue", "Cancel",
+    );
+    if (override !== "Continue") return;
+  }
+
   const available: string[] = [];
   if (state.cfg?.agents.claude_enabled && (await prereq.commandExists("claude")).passed) available.push("claude");
   if (state.cfg?.agents.codex_enabled && (await prereq.commandExists("codex")).passed) available.push("codex");
@@ -101,6 +110,17 @@ export async function cmdCodeReview() {
     for (const f of result.findings) { ch.appendLine(`[${f.severity.toUpperCase()}] ${f.file}:${f.line} — ${f.message}`); if (f.suggestion) ch.appendLine(`  Suggestion: ${f.suggestion}`); }
     ch.show(true);
     state.dashboard.addLog(`Review: ${result.findings.length} finding(s) (${dur}s)`, result.findings.some((f) => f.severity === "error") ? "error" : "warn");
+
+    // Enhance findings with blame context for the most critical finding
+    const errorFindings = result.findings.filter((f) => f.severity === "error");
+    if (errorFindings.length > 0) {
+      const { blameError } = await import("../core/blame");
+      const errorText = errorFindings.map((f) => `${f.file}:${f.line}`).join("\n");
+      const blame = await blameError(state.cwd, errorText);
+      if (blame) {
+        ch.appendLine(`\nRoot cause: commit ${blame.commitHash.slice(0, 8)} (${blame.author}, ${blame.date}): ${blame.summary}`);
+      }
+    }
   }
 }
 

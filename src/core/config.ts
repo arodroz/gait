@@ -46,6 +46,9 @@ export interface HitlConfig {
     auto_snapshot: boolean;
     retention: string;
   };
+  budget: {
+    daily_limit_usd: number;  // 0 = unlimited
+  };
 }
 
 export const DEFAULT_CONFIG: HitlConfig = {
@@ -71,6 +74,7 @@ export const DEFAULT_CONFIG: HitlConfig = {
     cross_agent_conflict_window_s: 14400,
   },
   snapshots: { auto_snapshot: true, retention: "48h" },
+  budget: { daily_limit_usd: 0 },
 };
 
 // ── Stack detection (used by preflight, dashboard, agents-md) ──
@@ -121,7 +125,22 @@ export function load(dir: string): HitlConfig {
   const configPath = path.join(dir, DOT_DIR, CONFIG_FILE);
   const raw = fs.readFileSync(configPath, "utf-8");
   const parsed = parseToml(raw) as Record<string, unknown>;
-  return deepMerge(DEFAULT_CONFIG, parsed) as HitlConfig;
+  const merged = deepMerge(DEFAULT_CONFIG, parsed) as HitlConfig;
+  return validateConfig(merged);
+}
+
+function validateConfig(cfg: HitlConfig): HitlConfig {
+  // Ensure required string fields have values
+  if (typeof cfg.project.name !== "string") cfg.project.name = "";
+  if (cfg.project.mode !== "dev" && cfg.project.mode !== "prod") cfg.project.mode = "dev";
+  // Ensure arrays are arrays
+  if (!Array.isArray(cfg.prod.paths)) cfg.prod.paths = [];
+  if (!Array.isArray(cfg.reviewer.on_severity)) cfg.reviewer.on_severity = ["medium", "high"];
+  // Ensure numeric fields are numbers
+  if (typeof cfg.interception.auto_accept_timeout_ms !== "number") cfg.interception.auto_accept_timeout_ms = 10000;
+  if (typeof cfg.reviewer.timeout_ms !== "number") cfg.reviewer.timeout_ms = 8000;
+  if (typeof cfg.decision_points.cross_agent_conflict_window_s !== "number") cfg.decision_points.cross_agent_conflict_window_s = 14400;
+  return cfg;
 }
 
 export function save(dir: string, cfg: HitlConfig): void {
@@ -164,6 +183,9 @@ cross_agent_conflict_window_s = ${cfg.decision_points.cross_agent_conflict_windo
 [snapshots]
 auto_snapshot = ${cfg.snapshots.auto_snapshot}
 retention = ${JSON.stringify(cfg.snapshots.retention)}
+
+[budget]
+daily_limit_usd = ${cfg.budget.daily_limit_usd}   # 0 = unlimited
 `;
 
   fs.writeFileSync(path.join(gaitDirPath, CONFIG_FILE), template);

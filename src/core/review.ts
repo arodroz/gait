@@ -95,14 +95,6 @@ export function parseFindings(output: string): ReviewFinding[] {
   }
 }
 
-/** Check if findings should block the gate */
-export function shouldBlock(findings: ReviewFinding[], blockOn: string): boolean {
-  if (blockOn === "none") return false;
-  const levels: Record<string, number> = { error: 3, warning: 2, info: 1 };
-  const threshold = levels[blockOn] ?? 3;
-  return findings.some((f) => (levels[f.severity] ?? 0) >= threshold);
-}
-
 function loadChangedFiles(cwd: string, files: string[], maxPerFile: number): string {
   const parts: string[] = [];
   for (const file of files.slice(0, 5)) {

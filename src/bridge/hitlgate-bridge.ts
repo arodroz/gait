@@ -11,7 +11,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { findGaitDir } from "../core/find-gait-dir";
+import { findGaitDir, pollForDecision } from "../core/find-gait-dir";
 
 // ── Types ──
 
@@ -85,35 +85,6 @@ function readStdin(): Promise<string> {
   });
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function pollForDecision(
-  gaitDir: string,
-  id: string,
-  timeoutMs = 120000,
-  intervalMs = 200,
-): Promise<DecisionResult> {
-  const decisionPath = path.join(gaitDir, "decisions", `${id}.json`);
-  const start = Date.now();
-
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const raw = await fs.promises.readFile(decisionPath, "utf8");
-      const decision = JSON.parse(raw) as DecisionResult;
-      await fs.promises.unlink(decisionPath).catch(() => {});
-      return decision;
-    } catch {
-      await sleep(intervalMs);
-    }
-  }
-
-  // Timeout — reject to be safe
-  process.stderr.write("HITL-Gate: Decision timeout — action rejected\n");
-  return { id, decision: "reject", note: "timeout", ts: new Date().toISOString() };
-}
-
 async function extractSessionContext(transcriptPath?: string): Promise<string | undefined> {
   if (!transcriptPath) return undefined;
   try {
@@ -181,11 +152,12 @@ async function main() {
   await fs.promises.unlink(pendingPath).catch(() => {});
 
   // 8. Exit based on decision
-  if (decision.decision === "reject") {
+  if (decision.decision === "reject" || decision.decision === "edit") {
+    const label = decision.decision === "edit" ? "rejected with note" : "rejected";
     process.stderr.write(
       decision.note
-        ? `HITL-Gate: Action rejected — ${decision.note}\n`
-        : "HITL-Gate: Action rejected by user\n",
+        ? `HITL-Gate: Action ${label} — ${decision.note}\n`
+        : `HITL-Gate: Action ${label} by user\n`,
     );
     process.exit(2);
   }

@@ -114,8 +114,8 @@ export function detectPublicApiChange(diffPreview?: string): { detected: boolean
   const removed: string[] = [];
 
   for (const line of lines) {
-    if (EXPORT_ADDED_TS.test(line)) added.push(line.slice(1).trim());
-    if (EXPORT_REMOVED_TS.test(line)) removed.push(line.slice(1).trim());
+    if (EXPORT_ADDED_TS.test(line) || EXPORT_ADDED_PY.test(line)) added.push(line.slice(1).trim());
+    if (EXPORT_REMOVED_TS.test(line) || EXPORT_REMOVED_PY.test(line)) removed.push(line.slice(1).trim());
   }
 
   // Public API change = a symbol was added or removed (not just modified)

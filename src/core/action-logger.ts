@@ -4,7 +4,7 @@ import type { Severity } from "./config";
 
 // ── Types ──
 
-export type HumanDecision = "accept" | "reject" | "edit" | "auto_accept" | "timeout_reject";
+export type HumanDecision = "accept" | "reject" | "edit" | "auto_accept";
 
 export interface DecisionPoint {
   type: string;

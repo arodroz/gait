@@ -35,11 +35,6 @@ export class Interceptor {
     return this.watcher;
   }
 
-  stop(): void {
-    this.watcher?.dispose();
-    this.watcher = undefined;
-  }
-
   private async onPendingFile(uri: vscode.Uri): Promise<void> {
     const filename = path.basename(uri.fsPath);
     if (this.processing.has(filename)) return;
@@ -159,16 +154,12 @@ export class Interceptor {
     }
 
     // Auto-accept with timeout
-    let resolved = false;
     const notifPromise = vscode.window.showInformationMessage(label, "View", "Reject");
     const autoAcceptPromise = new Promise<"auto_accept">((resolve) => {
-      setTimeout(() => {
-        if (!resolved) resolve("auto_accept");
-      }, this.config.interception.auto_accept_timeout_ms);
+      setTimeout(() => resolve("auto_accept"), this.config.interception.auto_accept_timeout_ms);
     });
 
     const result = await Promise.race([notifPromise, autoAcceptPromise]);
-    resolved = true;
 
     if (result === "Reject") {
       return { id: action.id, decision: "reject", ts: new Date().toISOString() };
