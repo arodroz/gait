@@ -2,7 +2,7 @@
   "name": "gait-quality-gate",
   "displayName": "HITL-Gate — Human-in-the-Loop for AI Agents",
   "description": "⚠️ Experimental — Intercept, evaluate, and decide on AI agent actions before they write code",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "arodroz",
   "icon": "assets/icon.png",
   "repository": {

@@ -28,6 +28,10 @@ import * as git from "./core/git";
 
 let decorationManager: DecorationManager | undefined;
 
+function resolveWorkspacePath(filePath: string): string {
+  return path.isAbsolute(filePath) ? filePath : path.join(state.cwd, filePath);
+}
+
 export function activate(context: vscode.ExtensionContext) {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) return;
@@ -111,14 +115,14 @@ export function activate(context: vscode.ExtensionContext) {
       case "restoreSnapshot": await cmdRestoreSnapshot(); break;
       case "openDiff": {
         try {
-          const uri = vscode.Uri.file(path.join(state.cwd, msg.data as string));
+          const uri = vscode.Uri.file(resolveWorkspacePath(msg.data as string));
           await vscode.commands.executeCommand("git.openChange", uri);
         } catch { /* file may no longer exist */ }
         break;
       }
       case "openFile": {
         try {
-          const doc = await vscode.workspace.openTextDocument(path.join(state.cwd, msg.data as string));
+          const doc = await vscode.workspace.openTextDocument(resolveWorkspacePath(msg.data as string));
           await vscode.window.showTextDocument(doc);
         } catch { vscode.window.showWarningMessage(`File not found: ${msg.data}`); }
         break;
@@ -126,7 +130,7 @@ export function activate(context: vscode.ExtensionContext) {
       case "openFileAtChange": {
         try {
           const firstLine = await getFirstChangedLine(msg.data as string);
-          const doc = await vscode.workspace.openTextDocument(path.join(state.cwd, msg.data as string));
+          const doc = await vscode.workspace.openTextDocument(resolveWorkspacePath(msg.data as string));
           const editor = await vscode.window.showTextDocument(doc);
           if (firstLine > 0) {
             const pos = new vscode.Position(firstLine - 1, 0);
