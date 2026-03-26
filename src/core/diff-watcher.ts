@@ -16,14 +16,7 @@ export async function getCurrentDiffs(cwd: string): Promise<FileDiff[]> {
   return parseDiffOutput(result.stdout);
 }
 
-/** Also include untracked new files */
-export async function getUntrackedFiles(cwd: string): Promise<string[]> {
-  const result = await run("git", ["ls-files", "--others", "--exclude-standard"], cwd, 5000);
-  if (result.exitCode !== 0) return [];
-  return result.stdout.trim().split("\n").filter(Boolean);
-}
-
-function parseDiffOutput(output: string): FileDiff[] {
+export function parseDiffOutput(output: string): FileDiff[] {
   const diffs: FileDiff[] = [];
   const files = output.split(/^diff --git /m).filter(Boolean);
 

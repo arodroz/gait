@@ -66,14 +66,14 @@ export const DEFAULT_CONFIG: HitlConfig = {
     file_renamed: true,
     schema_change: true,
     cross_agent_conflict: true,
-    intent_drift: true,
+    intent_drift: false,  // Not yet implemented (Phase 3) — enable when LLM-based drift detection is added
     public_api_change: true,
     cross_agent_conflict_window_s: 14400,
   },
   snapshots: { auto_snapshot: true, retention: "48h" },
 };
 
-// ── Legacy types kept for compatibility with fork modules still in use ──
+// ── Stack detection (used by preflight, dashboard, agents-md) ──
 
 export type Stack = "go" | "python" | "typescript" | "swift";
 
@@ -157,7 +157,7 @@ file_deleted = ${cfg.decision_points.file_deleted}
 file_renamed = ${cfg.decision_points.file_renamed}
 schema_change = ${cfg.decision_points.schema_change}
 cross_agent_conflict = ${cfg.decision_points.cross_agent_conflict}
-intent_drift = ${cfg.decision_points.intent_drift}
+intent_drift = ${cfg.decision_points.intent_drift}   # Not yet implemented — Phase 3
 public_api_change = ${cfg.decision_points.public_api_change}
 cross_agent_conflict_window_s = ${cfg.decision_points.cross_agent_conflict_window_s}
 

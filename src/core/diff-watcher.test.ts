@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { parseDiffOutput } from "./diff-watcher";
 
-// Test the diff parsing logic by importing internal-ish behavior
-// getCurrentDiffs requires a git repo, so we test the output parsing pattern
-describe("diff-watcher output parsing", () => {
-  it("counts additions and deletions from hunk content", () => {
-    const hunks = `--- a/src/foo.ts
+describe("diff-watcher", () => {
+  it("parses a single-file diff", () => {
+    const output = `diff --git a/src/foo.ts b/src/foo.ts
+--- a/src/foo.ts
 +++ b/src/foo.ts
 @@ -1,3 +1,5 @@
  const a = 1;
@@ -13,17 +13,47 @@ describe("diff-watcher output parsing", () => {
 -const old = 0;
  const d = 4;`;
 
-    const adds = (hunks.match(/^\+[^+]/gm) || []).length;
-    const dels = (hunks.match(/^-[^-]/gm) || []).length;
-    expect(adds).toBe(2);
-    expect(dels).toBe(1);
+    const result = parseDiffOutput(output);
+    expect(result).toHaveLength(1);
+    expect(result[0].file).toBe("src/foo.ts");
+    expect(result[0].hunks).toContain("+const b = 2;");
+    expect(result[0].hunks).toContain("-const old = 0;");
   });
 
-  it("handles empty hunks", () => {
-    const hunks = "";
-    const adds = (hunks.match(/^\+[^+]/gm) || []).length;
-    const dels = (hunks.match(/^-[^-]/gm) || []).length;
-    expect(adds).toBe(0);
-    expect(dels).toBe(0);
+  it("parses multiple files", () => {
+    const output = `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1 +1 @@
+-old
++new
+diff --git a/src/b.ts b/src/b.ts
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1 +1 @@
+-foo
++bar`;
+
+    const result = parseDiffOutput(output);
+    expect(result).toHaveLength(2);
+    expect(result[0].file).toBe("src/a.ts");
+    expect(result[1].file).toBe("src/b.ts");
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(parseDiffOutput("")).toEqual([]);
+  });
+
+  it("caps hunks at 2000 chars per file", () => {
+    const longLine = "+" + "x".repeat(3000);
+    const output = `diff --git a/big.ts b/big.ts
+--- a/big.ts
++++ b/big.ts
+@@ -1 +1 @@
+${longLine}`;
+
+    const result = parseDiffOutput(output);
+    expect(result).toHaveLength(1);
+    expect(result[0].hunks.length).toBeLessThanOrEqual(2000);
   });
 });

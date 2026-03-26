@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import * as readline from "readline";
 import * as fs from "fs";
 import * as path from "path";
+import { findGaitDir } from "../core/find-gait-dir";
 
 interface PendingAction {
   id: string;
@@ -30,20 +31,6 @@ function generateActionId(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function findGaitDir(startDir: string): Promise<string | null> {
-  let dir = startDir;
-  while (true) {
-    const candidate = path.join(dir, ".gait");
-    try {
-      await fs.promises.access(path.join(candidate, "config.toml"));
-      return candidate;
-    } catch { /* not here */ }
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
 }
 
 async function pollForDecision(
@@ -92,8 +79,9 @@ export async function runCodexWithInterception(
   let inApprovalBlock = false;
   let currentFile = "";
   let diffLines: string[] = [];
+  let processingLock: Promise<void> = Promise.resolve();
 
-  rl.on("line", async (line) => {
+  rl.on("line", (line) => {
     onOutput?.(line);
 
     // Detect start of approval block
@@ -112,7 +100,7 @@ export async function runCodexWithInterception(
       }
     }
 
-    // Detect confirmation prompt
+    // Detect confirmation prompt — serialize async work through a lock
     if (line.includes("Accept?") || line.match(/\[y\/N\]/i)) {
       inApprovalBlock = false;
 
@@ -124,43 +112,52 @@ export async function runCodexWithInterception(
         }
       }
 
-      const id = generateActionId();
-      const action: PendingAction = {
-        id,
-        agent: "codex",
-        session_id: sessionId,
-        tool: "Edit",
-        files: currentFile ? [currentFile] : [],
-        intent: task.slice(0, 200),
-        diff_preview: diffLines.join("\n").slice(0, 6000) || undefined,
-        session_context: task,
-        ts: new Date().toISOString(),
-      };
+      // Capture state for this approval block before resetting
+      const capturedFile = currentFile;
+      const capturedDiff = diffLines.join("\n").slice(0, 6000) || undefined;
 
-      // Write pending file
-      const pendingPath = path.join(gaitDir, "pending", `${id}.json`);
-      await fs.promises.mkdir(path.dirname(pendingPath), { recursive: true });
-      await fs.promises.writeFile(pendingPath, JSON.stringify(action, null, 2));
-
-      // Poll for decision
-      const decision = await pollForDecision(gaitDir, id);
-
-      // Cleanup pending
-      await fs.promises.unlink(pendingPath).catch(() => {});
-
-      // Respond to Codex
-      if (decision.decision === "reject") {
-        proc.stdin!.write("n\n");
-        onOutput?.(`[hitlgate] Rejected: ${currentFile}`);
-      } else {
-        proc.stdin!.write("y\n");
-        onOutput?.(`[hitlgate] Accepted: ${currentFile}`);
-      }
-
-      // Reset
+      // Reset immediately so next block can accumulate
       buffer = [];
       diffLines = [];
       currentFile = "";
+
+      // Chain async work to prevent interleaving
+      processingLock = processingLock.then(async () => {
+        const id = generateActionId();
+        const action: PendingAction = {
+          id,
+          agent: "codex",
+          session_id: sessionId,
+          tool: "Edit",
+          files: capturedFile ? [capturedFile] : [],
+          intent: task.slice(0, 200),
+          diff_preview: capturedDiff,
+          session_context: task,
+          ts: new Date().toISOString(),
+        };
+
+        // Write pending file
+        const pendingPath = path.join(gaitDir, "pending", `${id}.json`);
+        await fs.promises.mkdir(path.dirname(pendingPath), { recursive: true });
+        await fs.promises.writeFile(pendingPath, JSON.stringify(action, null, 2));
+
+        // Poll for decision
+        const decision = await pollForDecision(gaitDir, id);
+
+        // Cleanup pending
+        await fs.promises.unlink(pendingPath).catch(() => {});
+
+        // Respond to Codex
+        if (decision.decision === "reject") {
+          proc.stdin!.write("n\n");
+          onOutput?.(`[hitlgate] Rejected: ${capturedFile}`);
+        } else {
+          proc.stdin!.write("y\n");
+          onOutput?.(`[hitlgate] Accepted: ${capturedFile}`);
+        }
+      }).catch((err) => {
+        console.error(`[hitlgate] Codex bridge error: ${err}`);
+      });
     }
   });
 

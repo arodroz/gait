@@ -27,7 +27,12 @@ export async function take(cwd: string, gaitDir: string): Promise<Snapshot> {
     const listResult = await run("git", ["stash", "list", "--max-count=1"], cwd, 5000);
     stashRef = listResult.stdout.trim().split(":")[0]; // e.g., "stash@{0}"
     // Immediately pop — we just wanted to record it, not leave the tree clean
-    await run("git", ["stash", "pop"], cwd, 30_000);
+    const popResult = await run("git", ["stash", "pop"], cwd, 30_000);
+    if (popResult.exitCode !== 0) {
+      console.warn(`[hitlgate] git stash pop failed: ${popResult.stderr}`);
+      // Don't record the stash ref if pop failed — state is ambiguous
+      stashRef = undefined;
+    }
   }
 
   const snapshot: Snapshot = {

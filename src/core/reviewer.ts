@@ -81,10 +81,13 @@ async function reviewWithClaude(
       messages: [{ role: "user", content: prompt }],
     }),
     rejectAfter(timeoutMs, "reviewer timeout"),
-  ]) as any;
+  ]);
 
-  const text = response.content[0].text;
-  return parseReviewerResponse(text);
+  const block = (response as { content: Array<{ type: string; text?: string }> }).content[0];
+  if (!block || block.type !== "text" || !block.text) {
+    throw new Error("Reviewer returned empty or non-text response");
+  }
+  return parseReviewerResponse(block.text);
 }
 
 async function reviewWithCodex(
@@ -109,9 +112,13 @@ async function reviewWithCodex(
       response_format: { type: "json_object" },
     }),
     rejectAfter(timeoutMs, "reviewer timeout"),
-  ]) as any;
+  ]);
 
-  return parseReviewerResponse(response.choices[0].message.content);
+  const content = (response as { choices: Array<{ message: { content: string | null } }> }).choices[0]?.message?.content;
+  if (!content) {
+    throw new Error("Codex reviewer returned empty response");
+  }
+  return parseReviewerResponse(content);
 }
 
 // ── Public API ──
@@ -136,7 +143,8 @@ export async function review(
     : cfg.reviewer.codex_api_key_env;
 
   if (!process.env[reviewerKeyEnv]) {
-    // Fall back to same-agent self-review
+    // Cross-agent review is the security guarantee — self-review weakens it.
+    // Fall back to same-agent review only if available, but warn loudly.
     const selfKeyEnv = action.agent === "claude"
       ? cfg.reviewer.claude_api_key_env
       : cfg.reviewer.codex_api_key_env;
@@ -146,7 +154,10 @@ export async function review(
       return null;
     }
 
-    console.warn(`[hitlgate] Reviewer: ${reviewerKeyEnv} not set, ${action.agent} will self-review`);
+    console.warn(
+      `[hitlgate] WARNING: ${reviewerKeyEnv} not set — falling back to same-agent self-review. ` +
+      `This weakens the adversarial review guarantee. Set ${reviewerKeyEnv} for cross-agent review.`,
+    );
     reviewerAgent = action.agent;
   }
 

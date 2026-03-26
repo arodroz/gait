@@ -22,11 +22,6 @@ export async function branch(cwd: string): Promise<string> {
   return r.stdout.trim();
 }
 
-export async function stagedFiles(cwd: string): Promise<string[]> {
-  const r = await git(cwd, "diff", "--cached", "--name-only");
-  return r.stdout.trim().split("\n").filter(Boolean);
-}
-
 export async function diff(cwd: string, cached = false): Promise<string> {
   const args = ["diff"];
   if (cached) args.push("--cached");
@@ -60,15 +55,6 @@ export async function log(cwd: string, n = 10): Promise<Commit[]> {
       const [hash, subject, author, date] = line.split("|");
       return { hash, subject, author, date };
     });
-}
-
-export async function isRepo(cwd: string): Promise<boolean> {
-  try {
-    const r = await git(cwd, "rev-parse", "--is-inside-work-tree");
-    return r.stdout.trim() === "true";
-  } catch {
-    return false;
-  }
 }
 
 export async function isClean(cwd: string): Promise<boolean> {

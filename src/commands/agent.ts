@@ -21,9 +21,9 @@ export async function cmdRunAgent() {
   }
 
   const available: string[] = [];
-  if ((await prereq.commandExists("claude")).passed) available.push("claude");
-  if ((await prereq.commandExists("codex")).passed) available.push("codex");
-  if (!available.length) { vscode.window.showWarningMessage("No AI agents on PATH."); return; }
+  if (state.cfg?.agents.claude_enabled && (await prereq.commandExists("claude")).passed) available.push("claude");
+  if (state.cfg?.agents.codex_enabled && (await prereq.commandExists("codex")).passed) available.push("codex");
+  if (!available.length) { vscode.window.showWarningMessage("No AI agents enabled or on PATH."); return; }
 
   const kind = await vscode.window.showQuickPick(available, { placeHolder: "Select agent" });
   if (!kind) return;
@@ -50,9 +50,11 @@ export async function cmdRunAgent() {
   }
   if (!prompt) return;
 
-  // Snapshot
-  const snap = await snapshot.take(state.cwd, config.gaitDir(state.cwd));
-  state.dashboard.addLog(`Snapshot: ${snap.id}`, "info");
+  // Snapshot (if enabled in config)
+  const snap = state.cfg?.snapshots.auto_snapshot !== false
+    ? await snapshot.take(state.cwd, config.gaitDir(state.cwd))
+    : null;
+  if (snap) state.dashboard.addLog(`Snapshot: ${snap.id}`, "info");
 
   // Prepend memory
   const memoryPrefix = memory.buildPromptPrefix(config.gaitDir(state.cwd));
@@ -76,7 +78,7 @@ export async function cmdRunAgent() {
   }, 2000);
 
   try {
-    await state.agent.start(kind as any, fullPrompt, state.cwd);
+    await state.agent.start(kind as "claude" | "codex", fullPrompt, state.cwd);
   } catch (err) {
     if (state.diffPollInterval) { clearInterval(state.diffPollInterval); state.diffPollInterval = undefined; }
     state.dashboard.addLog(`Failed to start agent: ${err}`, "error");
@@ -90,8 +92,7 @@ export async function cmdCodeReview() {
   const diff = await git.diff(state.cwd, true).catch(() => "") || await git.diff(state.cwd, false).catch(() => "");
   if (!diff) { vscode.window.showInformationMessage("No changes to review."); return; }
   const changedFiles = (await git.diffStat(state.cwd).catch(() => [])).map((s) => s.path);
-  const reviewCfg = (state.cfg as any).review ?? {};
-  const result = await reviewDiff(state.cwd, config.gaitDir(state.cwd), diff, changedFiles, reviewCfg.agent ?? "claude",
+  const result = await reviewDiff(state.cwd, config.gaitDir(state.cwd), diff, changedFiles, "claude",
     (line) => state.dashboard.addLog(`[review] ${line}`, "info"));
   const dur = (result.duration / 1000).toFixed(1);
   if (result.findings.length === 0) { state.dashboard.addLog(`Review passed (${dur}s)`, "success"); vscode.window.showInformationMessage("No issues."); }

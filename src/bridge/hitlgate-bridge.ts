@@ -11,6 +11,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { findGaitDir } from "../core/find-gait-dir";
 
 // ── Types ──
 
@@ -71,20 +72,6 @@ function extractIntent(payload: ClaudeHookPayload): string {
   if (payload.tool_input.description) return payload.tool_input.description;
   if (payload.tool_input.command) return `bash: ${payload.tool_input.command.slice(0, 100)}`;
   return payload.tool_name;
-}
-
-async function findGaitDir(startDir: string): Promise<string | null> {
-  let dir = startDir;
-  while (true) {
-    const candidate = path.join(dir, ".gait");
-    try {
-      await fs.promises.access(path.join(candidate, "config.toml"));
-      return candidate;
-    } catch { /* not here */ }
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
 }
 
 function readStdin(): Promise<string> {
@@ -186,9 +173,6 @@ async function main() {
   const pendingPath = path.join(gaitDir, "pending", `${id}.json`);
   await fs.promises.mkdir(path.dirname(pendingPath), { recursive: true });
   await fs.promises.writeFile(pendingPath, JSON.stringify(action, null, 2));
-
-  // Also write last action id for PostToolUse hook
-  await fs.promises.writeFile(path.join(gaitDir, "last_action_id"), id).catch(() => {});
 
   // 6. Poll for decision
   const decision = await pollForDecision(gaitDir, id);

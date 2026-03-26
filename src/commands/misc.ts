@@ -78,7 +78,7 @@ export async function cmdRunWorkflow() {
     onStepStart: (step, total, desc) => state.dashboard.addLog(`  ${step}/${total}: ${desc}`, "info"),
     onStepDone: (step, passed) => state.dashboard.addLog(`  ${step}: ${passed ? "ok" : "FAIL"}`, passed ? "success" : "error"),
     onAgentOutput: (line) => state.dashboard.addLog(`  [wf] ${line}`, "info"),
-    runGate: async () => true,
+    runGate: async () => true,  // TODO: Wire to test runner or reviewer check — currently a no-op placeholder
   });
   if (progress.status !== "passed") {
     if (await vscode.window.showWarningMessage("Failed. Restore?", "Restore", "Keep") === "Restore")

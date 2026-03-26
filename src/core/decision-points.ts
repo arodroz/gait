@@ -51,20 +51,7 @@ export const DECISION_POINT_LABELS: Record<DecisionPointType, string> = {
 // ── Glob matching (simple, no dependency) ──
 
 function matchGlob(pattern: string, filePath: string): boolean {
-  // Convert glob to regex: ** → .*, * → [^/]*, ? → .
-  const regexStr = "^" + pattern
-    .replace(/\*\*/g, "§DOUBLESTAR§")
-    .replace(/\*/g, "[^/]*")
-    .replace(/§DOUBLESTAR§/g, ".*")
-    .replace(/\?/g, ".")
-    .replace(/\./g, "\\.")
-    // Undo the dot escaping we just did for regex dots
-    .replace(/\\\.\*/g, ".*")
-    .replace(/\\\.\?/g, ".") + "$";
-
-  // Simpler approach: just do basic ** and * matching
-  const re = buildGlobRegex(pattern);
-  return re.test(filePath);
+  return buildGlobRegex(pattern).test(filePath);
 }
 
 function buildGlobRegex(glob: string): RegExp {
@@ -94,11 +81,9 @@ function buildGlobRegex(glob: string): RegExp {
 
 // ── Detection functions ──
 
-const EXPORT_PATTERN_TS = /^[-+]\s*export\s+(function|class|interface|type|const|let|enum|default)/;
 const EXPORT_ADDED_TS = /^\+\s*export\s+(function|class|interface|type|const|let|enum|default)/;
 const EXPORT_REMOVED_TS = /^-\s*export\s+(function|class|interface|type|const|let|enum|default)/;
 
-const EXPORT_PATTERN_PY = /^[-+](def|class)\s+[a-zA-Z]/;
 const EXPORT_ADDED_PY = /^\+(def|class)\s+[a-zA-Z]/;
 const EXPORT_REMOVED_PY = /^-(def|class)\s+[a-zA-Z]/;
 
@@ -324,7 +309,11 @@ export async function evaluate(
   const prodResult = detectProdFile(action.files, cfg.prod.paths);
   if (prodResult.detected) { points.push("prod_file"); explanations.prod_file = prodResult.explanation; }
 
-  // intent_drift is skipped in Phase 2 (requires LLM call — Phase 3)
+  // intent_drift requires LLM comparison — not yet implemented.
+  // Log when the config flag is enabled so users know it's a no-op.
+  if (dp.intent_drift) {
+    console.debug("[hitlgate] intent_drift detection is enabled in config but not yet implemented (planned for Phase 3)");
+  }
 
   const severity = computeSeverity(points, cfg.project.mode);
   const presentation = computePresentation(severity, cfg.project.mode);

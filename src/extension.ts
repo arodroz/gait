@@ -11,7 +11,7 @@ import { StatusBarManager } from "./views/statusbar";
 import { ActionsTreeProvider, InfoTreeProvider, DecisionsTreeProvider, AgentsTreeProvider } from "./views/sidebar";
 import { DashboardPanel } from "./views/dashboard";
 import { state } from "./state";
-import { loadConfig, refreshFiles, sendNotify, getFirstChangedLine } from "./commands/helpers";
+import { loadConfig, refreshFiles, getFirstChangedLine } from "./commands/helpers";
 import { getOutputChannel } from "./state";
 import { cmdInit } from "./commands/init";
 import { cmdRunAgent, cmdCodeReview, cmdEditMemory, cmdViewMemory, cmdCostSummary } from "./commands/agent";
@@ -90,27 +90,49 @@ export function activate(context: vscode.ExtensionContext) {
       case "resumeAgent": state.agent.resume(); state.dashboard.addLog("Agent resumed", "info"); break;
       case "killAgent": state.agent.kill(); state.dashboard.addLog("Agent killed", "error"); break;
       case "rollback": await cmdRollback(); break;
-      case "requestState": state.dashboard.updateState({}); break;
+      case "requestState": {
+        // Populate recent decisions from the log when webview requests state
+        if (sharedLogger) {
+          sharedLogger.readRecent(10).then((records) => {
+            state.dashboard.updateState({
+              recentDecisions: records.reverse().map((r) => ({
+                id: r.id, agent: r.agent, tool: r.tool, files: r.files,
+                severity: r.severity, decision: r.human_decision,
+                ts: r.ts, intent: r.intent,
+              })),
+            });
+          }).catch(() => {});
+        } else {
+          state.dashboard.updateState({});
+        }
+        break;
+      }
       case "restoreSnapshot": await cmdRestoreSnapshot(); break;
       case "openDiff": {
-        const uri = vscode.Uri.file(path.join(state.cwd, msg.data as string));
-        await vscode.commands.executeCommand("git.openChange", uri);
+        try {
+          const uri = vscode.Uri.file(path.join(state.cwd, msg.data as string));
+          await vscode.commands.executeCommand("git.openChange", uri);
+        } catch { /* file may no longer exist */ }
         break;
       }
       case "openFile": {
-        const doc = await vscode.workspace.openTextDocument(path.join(state.cwd, msg.data as string));
-        await vscode.window.showTextDocument(doc);
+        try {
+          const doc = await vscode.workspace.openTextDocument(path.join(state.cwd, msg.data as string));
+          await vscode.window.showTextDocument(doc);
+        } catch { vscode.window.showWarningMessage(`File not found: ${msg.data}`); }
         break;
       }
       case "openFileAtChange": {
-        const firstLine = await getFirstChangedLine(msg.data as string);
-        const doc = await vscode.workspace.openTextDocument(path.join(state.cwd, msg.data as string));
-        const editor = await vscode.window.showTextDocument(doc);
-        if (firstLine > 0) {
-          const pos = new vscode.Position(firstLine - 1, 0);
-          editor.selection = new vscode.Selection(pos, pos);
-          editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
-        }
+        try {
+          const firstLine = await getFirstChangedLine(msg.data as string);
+          const doc = await vscode.workspace.openTextDocument(path.join(state.cwd, msg.data as string));
+          const editor = await vscode.window.showTextDocument(doc);
+          if (firstLine > 0) {
+            const pos = new vscode.Position(firstLine - 1, 0);
+            editor.selection = new vscode.Selection(pos, pos);
+            editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+          }
+        } catch { vscode.window.showWarningMessage(`File not found: ${msg.data}`); }
         break;
       }
       case "decision": {
@@ -142,11 +164,19 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
 
-  // File watcher
-  const watcher = vscode.workspace.createFileSystemWatcher("**/*", false, false, false);
-  watcher.onDidChange(() => refreshFiles());
-  watcher.onDidCreate(() => refreshFiles());
-  watcher.onDidDelete(() => refreshFiles());
+  // File watcher — scope to tracked files, exclude .git and node_modules
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(workspaceFolder, "{src,lib,app,packages}/**/*"),
+    false, false, false,
+  );
+  let refreshDebounce: NodeJS.Timeout | undefined;
+  const debouncedRefresh = () => {
+    if (refreshDebounce) clearTimeout(refreshDebounce);
+    refreshDebounce = setTimeout(() => refreshFiles(), 500);
+  };
+  watcher.onDidChange(debouncedRefresh);
+  watcher.onDidCreate(debouncedRefresh);
+  watcher.onDidDelete(debouncedRefresh);
   context.subscriptions.push(watcher);
 
   // Agent events
@@ -171,8 +201,6 @@ export function activate(context: vscode.ExtensionContext) {
     state.dashboard.updateState({ agentRunning: false, agentPaused: false, agentTokens: tokens });
 
     state.costTracker.estimateFromLines(agentKind, state.agent.currentSession?.prompt ?? "", state.agent.currentSession?.lines ?? 0, duration);
-    sendNotify("agent.done", `Agent ${agentKind} finished (${dur}s)`, { tokens, duration: dur });
-
     const stats = await git.diffStat(state.cwd).catch(() => []);
     state.dashboard.updateState({
       review: {
@@ -197,32 +225,49 @@ export function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand("setContext", "gait.initialized", config.configExists(state.cwd));
 }
 
+let sharedLogger: ActionLogger | undefined;
+
 function startInterceptor(context: vscode.ExtensionContext) {
   if (!state.cfg) return;
   const gaitDir = config.gaitDir(state.cwd);
-  const logger = new ActionLogger(gaitDir);
-  const interceptor = new Interceptor(state.cwd, gaitDir, state.cfg, logger, async (action, decision, evaluation) => {
+  sharedLogger = new ActionLogger(gaitDir);
+  const interceptor = new Interceptor(state.cwd, gaitDir, state.cfg, sharedLogger, async (action, decision, evaluation) => {
     const level = decision.decision === "reject" ? "warn" : "info";
     state.dashboard.addLog(
       `[${action.agent}] ${action.tool} ${action.files.join(", ")} → ${decision.decision} (${evaluation.severity})`,
       level,
     );
 
-    // Update decisions tree
-    const records = await logger.readRecent(20);
+    // Update decisions tree + dashboard recent decisions
+    const records = await sharedLogger!.readRecent(20);
     state.decisionsTree.update(records);
+    state.dashboard.updateState({
+      pendingDecision: undefined,
+      recentDecisions: records.slice(-10).reverse().map((r) => ({
+        id: r.id, agent: r.agent, tool: r.tool, files: r.files,
+        severity: r.severity, decision: r.human_decision,
+        ts: r.ts, intent: r.intent,
+      })),
+    });
 
     // Refresh decorations
     decorationManager?.refreshAll();
   });
 
   const disposable = interceptor.start();
-  state.interceptorWatcher = disposable as any;
+  state.interceptorWatcher = disposable;
   context.subscriptions.push(disposable);
 
   // Load initial decisions tree + check for learned patterns
-  logger.readRecent(50).then((records) => {
+  sharedLogger.readRecent(50).then((records) => {
     state.decisionsTree.update(records.slice(-20));
+    state.dashboard.updateState({
+      recentDecisions: records.slice(-10).reverse().map((r) => ({
+        id: r.id, agent: r.agent, tool: r.tool, files: r.files,
+        severity: r.severity, decision: r.human_decision,
+        ts: r.ts, intent: r.intent,
+      })),
+    });
 
     const suggestions = detectLearnedPatterns(records);
     if (suggestions.length > 0) {
@@ -239,12 +284,12 @@ function startInterceptor(context: vscode.ExtensionContext) {
         }
       });
     }
-  });
+  }).catch((err) => console.warn("[hitlgate] Failed to load initial decisions:", err));
 }
 
 function startDecorations(context: vscode.ExtensionContext) {
   const gaitDir = config.gaitDir(state.cwd);
-  const logger = new ActionLogger(gaitDir);
+  const logger = sharedLogger ?? new ActionLogger(gaitDir);
   decorationManager = new DecorationManager(context.extensionUri.fsPath, state.cwd, logger);
 
   // Apply decorations when editor changes
@@ -271,4 +316,7 @@ export function deactivate() {
   if (state.diffPollInterval) clearInterval(state.diffPollInterval);
   if (state.interceptorWatcher) state.interceptorWatcher.dispose();
   decorationManager?.dispose();
+  for (const ch of state.outputChannels.values()) ch.dispose();
+  state.outputChannels.clear();
+  state.agent?.kill();
 }

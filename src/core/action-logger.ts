@@ -113,7 +113,7 @@ export class ActionLogger {
     const records = await this.readRecent();
     return records.filter((r) => {
       for (const [key, value] of Object.entries(filter)) {
-        if ((r as any)[key] !== value) return false;
+        if (r[key as keyof ActionRecord] !== value) return false;
       }
       return true;
     });

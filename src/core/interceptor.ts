@@ -49,40 +49,53 @@ export class Interceptor {
       const action = await this.readPendingAction(uri.fsPath);
       if (!action) return;
 
-      const decision = await this.processAction(action);
+      const { decision, evaluation } = await this.processAction(action);
       await this.writeDecision(decision);
-
-      // The evaluation is needed for logging — re-evaluate (cached by JS engine, fast)
-      const recentActions = await this.logger.readRecent(200);
-      const evaluation = await evaluate(action, this.config, recentActions);
-
       await this.logAction(action, decision, evaluation);
       this.onDecisionCallback?.(action, decision, evaluation);
     } catch (err) {
+      // SECURITY: Never auto-accept on error — reject and surface the failure.
       const id = filename.replace(".json", "");
       const fallback: DecisionResult = {
         id,
-        decision: "accept",
-        note: `interceptor error: ${err}`,
+        decision: "reject",
+        note: `interceptor error — action rejected for safety: ${err}`,
         ts: new Date().toISOString(),
       };
       await this.writeDecision(fallback).catch(() => {});
+      console.error(`[hitlgate] Interceptor error processing ${filename}:`, err);
     } finally {
       this.processing.delete(filename);
     }
   }
 
   private async readPendingAction(filePath: string): Promise<PendingAction | null> {
-    try {
-      await new Promise((r) => setTimeout(r, 50));
-      const raw = await fs.promises.readFile(filePath, "utf8");
-      return JSON.parse(raw) as PendingAction;
-    } catch {
-      return null;
+    // Retry loop to handle partially-written files
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 50 * attempt));
+        const raw = await fs.promises.readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw);
+        // Validate required fields
+        if (
+          typeof parsed.id !== "string" ||
+          (parsed.agent !== "claude" && parsed.agent !== "codex") ||
+          typeof parsed.tool !== "string" ||
+          !Array.isArray(parsed.files) ||
+          typeof parsed.ts !== "string"
+        ) {
+          console.warn(`[hitlgate] Invalid pending action schema: ${filePath}`);
+          return null;
+        }
+        return parsed as PendingAction;
+      } catch {
+        if (attempt === 2) return null;
+      }
     }
+    return null;
   }
 
-  async processAction(action: PendingAction): Promise<DecisionResult> {
+  async processAction(action: PendingAction): Promise<{ decision: DecisionResult; evaluation: EvaluationResult }> {
     const recentActions = await this.logger.readRecent(200);
     const evaluation = await evaluate(action, this.config, recentActions);
 
@@ -115,7 +128,7 @@ export class Interceptor {
       }
     }
 
-    return decision;
+    return { decision, evaluation };
   }
 
   private async showNotificationDecision(
@@ -163,7 +176,8 @@ export class Interceptor {
 
     return {
       id: action.id,
-      decision: result === "auto_accept" ? "accept" : "accept",
+      decision: "accept",
+      note: result === "auto_accept" ? "auto-accepted (low severity, timeout)" : undefined,
       ts: new Date().toISOString(),
     };
   }
@@ -275,7 +289,10 @@ export class Interceptor {
         description: evaluation.explanations[p] ?? DECISION_POINT_LABELS[p],
       })),
       severity: evaluation.severity,
-      human_decision: decision.decision === "accept" ? "accept" : "reject",
+      human_decision: decision.note?.startsWith("auto-accepted")
+        ? "auto_accept"
+        : decision.decision === "edit" ? "edit"
+        : decision.decision === "accept" ? "accept" : "reject",
       human_note: decision.note,
       reviewer_agent: decision.reviewer_analysis?.reviewerAgent,
       reviewer_analysis: decision.reviewer_analysis,

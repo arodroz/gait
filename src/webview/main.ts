@@ -89,7 +89,6 @@ interface DashboardState {
   recentDecisions?: RecentDecision[];
 }
 
-const collapsedSections = new Set<string>();
 let activeTab: "dashboard" | "decisions" = "dashboard";
 
 // --- Helpers ---
@@ -231,12 +230,6 @@ function buildPendingDecision(pending: PendingDecision): HTMLElement {
     diffSection.appendChild(el("div", { className: "decision-label", style: "cursor: pointer;" }, "\u25B8 DIFF PREVIEW"));
     const diffPre = el("pre", { className: "diff-preview collapsed" });
     diffPre.textContent = pending.action.diff_preview.slice(0, 3000);
-    diffSection.querySelector(".decision-label")?.addEventListener("click", () => {
-      diffPre.classList.toggle("collapsed");
-      const label = diffSection.querySelector(".decision-label");
-      if (label) label.textContent = diffPre.classList.contains("collapsed") ? "\u25B8 DIFF PREVIEW" : "\u25BE DIFF PREVIEW";
-    });
-    // Fix: re-query after appending
     diffSection.appendChild(diffPre);
     const labelEl = diffSection.querySelector(".decision-label");
     if (labelEl) {

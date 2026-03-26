@@ -83,36 +83,6 @@ export async function checkHooksInstalled(
   }
 }
 
-/**
- * Remove HITL-Gate hooks from .claude/settings.json.
- */
-export async function uninstallHooks(workspaceRoot: string): Promise<void> {
-  const settingsPath = path.join(workspaceRoot, ".claude", "settings.json");
-
-  try {
-    const raw = await fs.promises.readFile(settingsPath, "utf8");
-    const settings = JSON.parse(raw);
-
-    if (settings?.hooks?.PreToolUse) {
-      settings.hooks.PreToolUse = settings.hooks.PreToolUse
-        .map((entry: any) => ({
-          ...entry,
-          hooks: (entry.hooks ?? []).filter((h: any) => !h[HITLGATE_TAG]),
-        }))
-        .filter((entry: any) => entry.hooks.length > 0);
-
-      if (settings.hooks.PreToolUse.length === 0) {
-        delete settings.hooks.PreToolUse;
-      }
-      if (Object.keys(settings.hooks).length === 0) {
-        delete settings.hooks;
-      }
-    }
-
-    await fs.promises.writeFile(settingsPath, JSON.stringify(settings, null, 2));
-  } catch { /* no settings file to uninstall from */ }
-}
-
 // ── Helpers ──
 
 function extractBridgePath(command: string): string {

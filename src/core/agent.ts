@@ -141,10 +141,10 @@ export class AgentRunner extends EventEmitter {
     const escaped = prompt.replace(/'/g, "'\\''");
     switch (kind) {
       case "claude":
-        // -p for non-interactive, --allowedTools to grant file edit/write/bash access
+        // -p for non-interactive, --allowedTools takes comma-separated tool names
         return ["claude", [
           "-p", `'${escaped}'`,
-          "--allowedTools", "Edit", "Write", "Bash", "Read", "Glob", "Grep",
+          "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep",
         ]];
       case "codex":
         return ["codex", ["--full-auto", `'${escaped}'`]];

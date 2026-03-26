@@ -9,6 +9,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
     messages = {
       create: vi.fn().mockResolvedValue({
         content: [{
+          type: "text",
           text: JSON.stringify({
             understoodIntent: "Fix a bug in the API",
             actualAction: "Modified the API route handler",
@@ -63,15 +64,21 @@ const baseAction: PendingAction = {
 };
 
 describe("reviewer", () => {
-  const origEnv = { ...process.env };
+  let origAnthropicKey: string | undefined;
+  let origOpenaiKey: string | undefined;
 
   beforeEach(() => {
+    origAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    origOpenaiKey = process.env.OPENAI_API_KEY;
     process.env.ANTHROPIC_API_KEY = "test-anthropic-key";
     process.env.OPENAI_API_KEY = "test-openai-key";
   });
 
   afterEach(() => {
-    process.env = { ...origEnv };
+    if (origAnthropicKey !== undefined) process.env.ANTHROPIC_API_KEY = origAnthropicKey;
+    else delete process.env.ANTHROPIC_API_KEY;
+    if (origOpenaiKey !== undefined) process.env.OPENAI_API_KEY = origOpenaiKey;
+    else delete process.env.OPENAI_API_KEY;
   });
 
   it("Claude action reviewed by Codex (cross-review)", async () => {

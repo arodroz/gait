@@ -78,7 +78,7 @@ async function doInit(projectName: string) {
   // Create prompt templates and workflow defaults
   prompts.createDefaults(config.gaitDir(state.cwd));
   workflow.createDefaults(config.gaitDir(state.cwd));
-  memory.createDefaults(config.gaitDir(state.cwd), state.cwd, config.load(state.cwd) as any);
+  memory.createDefaults(config.gaitDir(state.cwd), state.cwd, config.load(state.cwd));
 
   const stacks = config.detectStacks(state.cwd);
   const stackNames = stacks.join(", ") || "none detected";

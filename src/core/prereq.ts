@@ -25,15 +25,6 @@ export async function envVarSet(name: string): Promise<CheckResult> {
   };
 }
 
-export async function serviceReachable(name: string, host: string, port: number): Promise<CheckResult> {
-  const result = await run("nc", ["-z", "-w", "2", host, String(port)], os.tmpdir(), 5000);
-  return {
-    name,
-    passed: result.exitCode === 0,
-    error: result.exitCode !== 0 ? `${name} not reachable at ${host}:${port}` : undefined,
-  };
-}
-
 export async function runDefaultChecks(stacks: string[]): Promise<CheckResult[]> {
   const checks: Promise<CheckResult>[] = [commandExists("git")];
 

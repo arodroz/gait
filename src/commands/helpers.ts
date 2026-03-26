@@ -2,20 +2,9 @@ import * as vscode from "vscode";
 import * as config from "../core/config";
 import * as git from "../core/git";
 import { run } from "../core/runner";
-import { notify, type NotifyConfig, type NotifyPayload } from "../core/notify";
-import { state, getOutputChannel, cap } from "../state";
+import { state, getOutputChannel } from "../state";
 
-export { getOutputChannel, cap };
-
-export function sendNotify(event: import("../core/notify").NotifyEvent, message: string, details?: Record<string, unknown>) {
-  if (!state.cfg) return;
-  const notifyCfg = (state.cfg as any).notifications as NotifyConfig | undefined;
-  if (!notifyCfg) return;
-  const payload: NotifyPayload = { event, project: state.cfg.project.name, branch: "", message, details };
-  git.branch(state.cwd).then((b) => { payload.branch = b; }).catch(() => {}).finally(() => {
-    notify(notifyCfg, payload).catch(() => {});
-  });
-}
+export { getOutputChannel };
 
 export async function getFirstChangedLine(filePath: string): Promise<number> {
   try {

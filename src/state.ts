@@ -21,12 +21,7 @@ export const state = {
   diffPollInterval: undefined as NodeJS.Timeout | undefined,
   outputChannels: new Map<string, vscode.OutputChannel>(),
 
-  // HITL-specific state (populated in later phases)
-  pendingActions: new Map<string, unknown>(),
-  decisionHistory: [] as unknown[],
-  activeDecorations: new Map<string, vscode.TextEditorDecorationType>(),
-  interceptorWatcher: undefined as vscode.FileSystemWatcher | undefined,
-  reviewerInFlight: new Set<string>(),
+  interceptorWatcher: undefined as vscode.Disposable | undefined,
 };
 
 export function getOutputChannel(name: string): vscode.OutputChannel {
@@ -35,6 +30,3 @@ export function getOutputChannel(name: string): vscode.OutputChannel {
   return ch;
 }
 
-export function cap(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}

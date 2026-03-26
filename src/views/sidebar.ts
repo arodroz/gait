@@ -14,10 +14,6 @@ export class DecisionsTreeProvider implements vscode.TreeDataProvider<DecisionIt
     this._onDidChange.fire(undefined);
   }
 
-  refresh(): void {
-    this._onDidChange.fire(undefined);
-  }
-
   getTreeItem(element: DecisionItem): vscode.TreeItem {
     return element;
   }
